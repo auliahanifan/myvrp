@@ -1,0 +1,17 @@
+# Vehicle Fleet Configuration for Segarloka
+
+vehicles:
+  - name: "L300"
+    capacity: 800  # kg
+    cost_per_km: 5000  # Rupiah per kilometer
+
+  - name: "Granmax"
+    capacity: 500  # kg
+    cost_per_km: 3500  # Rupiah per kilometer
+
+  - name: "Pickup Small"
+    capacity: 300  # kg
+    cost_per_km: 2500  # Rupiah per kilometer
+
+# Unlimited fleet means we can use as many vehicles as needed
+unlimited: true

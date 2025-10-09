@@ -1,0 +1,6 @@
+sale_order_id,delivery_date,delivery_time,load_weight_in_kg,partner_id,display_name,alamat,coordinates,is_priority
+SO001,2025-10-10,08:00,25.5,C001,Toko Segar Jaya,Jl. Sudirman No. 123 Jakarta,"-6.2088,106.8456",0
+SO002,2025-10-10,08:30,30.0,C002,Warung Bu Siti,Jl. Thamrin No. 45 Jakarta,"-6.1951,106.8230",1
+SO003,2025-10-10,09:00,15.5,C003,Restoran Hijau,Jl. Gatot Subroto No. 78 Jakarta,"-6.2251,106.8090",0
+SO004,2025-10-10,09:30,40.0,C004,Pasar Segar,Jl. MH Thamrin No. 90 Jakarta,"-6.1844,106.8226",0
+SO005,2025-10-10,10:00,20.0,C005,Catering Sehat,Jl. Rasuna Said No. 12 Jakarta,"-6.2233,106.8403",1

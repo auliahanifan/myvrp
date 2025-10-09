@@ -1,0 +1,24 @@
+[project]
+name = "seg-vrp"
+version = "0.1.0"
+description = "VRP Solver for Segarloka delivery route optimization with OR-Tools"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "ortools>=9.8.3296",
+    "pandas>=2.1.4",
+    "numpy>=1.26.2",
+    "openpyxl>=3.1.2",
+    "pyyaml>=6.0.1",
+    "googlemaps>=4.10.0",
+    "streamlit>=1.29.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.3",
+    "pytest-cov>=4.1.0",
+    "black>=23.12.1",
+    "ruff>=0.1.8",
+]
