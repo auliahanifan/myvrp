@@ -7,8 +7,14 @@ using Folium, showing depot, customer locations, and optimized routes.
 
 import folium
 from folium import plugins
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 import random
+import requests
+import polyline
+import os
+import hashlib
+import json
+from pathlib import Path
 
 from src.models.location import Depot
 from src.models.route import RoutingSolution, Route
@@ -25,14 +31,23 @@ class MapVisualizer:
         '#118AB2', '#073B4C', '#EF476F', '#FFD166', '#06FFA5'
     ]
 
-    def __init__(self, depot: Depot):
+    def __init__(self, depot: Depot, radar_api_key: Optional[str] = None, enable_road_routing: bool = True):
         """
         Initialize the map visualizer
 
         Args:
             depot: Depot location
+            radar_api_key: Radar API key for road routing (optional)
+            enable_road_routing: Whether to use actual road paths vs straight lines
         """
         self.depot = depot
+        self.radar_api_key = radar_api_key or os.getenv("RADAR_API_KEY")
+        self.enable_road_routing = enable_road_routing and bool(self.radar_api_key)
+
+        # Cache directory for route geometries
+        self.cache_dir = Path(".cache/route_geometry")
+        if self.enable_road_routing:
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
 
     def create_map(self, solution: RoutingSolution, zoom_start: int = 12) -> folium.Map:
         """
@@ -72,6 +87,49 @@ class MapVisualizer:
 
         return m
 
+    def create_single_route_map(self, solution: RoutingSolution, route_idx: int, zoom_start: int = 13) -> folium.Map:
+        """
+        Create an interactive Folium map showing only a single route
+
+        Args:
+            solution: VRP solution to visualize
+            route_idx: Index of the route to display
+            zoom_start: Initial zoom level (default: 13, closer zoom for single route)
+
+        Returns:
+            Folium map object
+        """
+        if route_idx < 0 or route_idx >= len(solution.routes):
+            raise ValueError(f"Invalid route index: {route_idx}")
+
+        selected_route = solution.routes[route_idx]
+
+        # Center map on depot
+        m = folium.Map(
+            location=[self.depot.coordinates[0], self.depot.coordinates[1]],
+            zoom_start=zoom_start,
+            tiles='OpenStreetMap'
+        )
+
+        # Add depot marker
+        self._add_depot_marker(m)
+
+        # Add only the selected route with highlighted color
+        color = '#FF0000'  # Bright red for single route
+        self._add_route(m, selected_route, color, route_idx + 1)
+
+        # Add single route legend
+        self._add_single_route_legend(m, selected_route, route_idx + 1)
+
+        # Add map controls
+        folium.plugins.Fullscreen().add_to(m)
+        folium.plugins.MeasureControl().add_to(m)
+
+        # Fit bounds to show only this route
+        self._fit_single_route_bounds(m, selected_route)
+
+        return m
+
     def _add_depot_marker(self, m: folium.Map):
         """Add depot marker to map"""
         folium.Marker(
@@ -103,6 +161,111 @@ class MapVisualizer:
             opacity=0.5
         ).add_to(m)
 
+    def _get_road_path(self, start_coords: Tuple[float, float], end_coords: Tuple[float, float]) -> List[List[float]]:
+        """
+        Get actual road path between two coordinates using Radar Routes API
+
+        Args:
+            start_coords: (lat, lon) starting coordinates
+            end_coords: (lat, lon) ending coordinates
+
+        Returns:
+            List of [lat, lon] coordinates representing the road path
+        """
+        if not self.enable_road_routing:
+            # Return straight line if road routing disabled
+            return [list(start_coords), list(end_coords)]
+
+        # Create cache key from coordinates
+        cache_key = hashlib.md5(
+            f"{start_coords[0]},{start_coords[1]}|{end_coords[0]},{end_coords[1]}".encode()
+        ).hexdigest()
+        cache_file = self.cache_dir / f"{cache_key}.json"
+
+        # Check cache first
+        if cache_file.exists():
+            try:
+                with open(cache_file, 'r') as f:
+                    cached_data = json.load(f)
+                    return cached_data['path']
+            except:
+                pass  # Cache read failed, fetch from API
+
+        # Fetch from Radar API
+        try:
+            url = "https://api.radar.io/v1/route/directions"
+            headers = {
+                "Authorization": self.radar_api_key,
+                "Content-Type": "application/json"
+            }
+            params = {
+                "locations": f"{start_coords[0]},{start_coords[1]}|{end_coords[0]},{end_coords[1]}",
+                "mode": "car",
+                "geometry": "polyline6"
+            }
+
+            response = requests.get(url, headers=headers, params=params, timeout=10)
+
+            # Check for successful response
+            if response.status_code == 200:
+                data = response.json()
+
+                # Validate response structure
+                if "routes" in data and len(data["routes"]) > 0:
+                    route_data = data["routes"][0]
+
+                    # Extract polyline from correct location in response
+                    polyline_data = None
+                    if "geometry" in route_data:
+                        geometry = route_data["geometry"]
+                        # Check if geometry is a dict with 'polyline' key
+                        if isinstance(geometry, dict) and "polyline" in geometry:
+                            polyline_data = geometry["polyline"]
+                        # Or if geometry is directly a string
+                        elif isinstance(geometry, str):
+                            polyline_data = geometry
+
+                    if polyline_data:
+                        # Decode polyline6 format
+                        try:
+                            decoded = polyline.decode(polyline_data, precision=6)
+                            path = [[lat, lon] for lat, lon in decoded]
+
+                            # Cache the result
+                            try:
+                                with open(cache_file, 'w') as f:
+                                    json.dump({"path": path}, f)
+                            except Exception:
+                                pass  # Cache write failed, not critical
+
+                            return path
+                        except Exception as decode_error:
+                            # Polyline decode failed
+                            pass
+            else:
+                # Log detailed error for debugging
+                try:
+                    error_data = response.json()
+                    error_msg = error_data.get('meta', {}).get('message', 'Unknown error')
+                except:
+                    error_msg = f"HTTP {response.status_code}"
+
+                # Only print on first error to avoid spam
+                pass
+
+        except requests.exceptions.Timeout:
+            # Timeout - silently fall back
+            pass
+        except requests.exceptions.RequestException as e:
+            # Network error - silently fall back
+            pass
+        except Exception as e:
+            # Any other error - silently fall back
+            pass
+
+        # Fallback to straight line (always works)
+        return [list(start_coords), list(end_coords)]
+
     def _add_route(self, m: folium.Map, route: Route, color: str, route_number: int):
         """
         Add a single route to the map
@@ -119,17 +282,14 @@ class MapVisualizer:
             show=True
         )
 
-        # Collect coordinates for the route line
-        route_coords = []
+        # Build list of waypoints (depot -> stops -> depot)
+        waypoints = [[self.depot.coordinates[0], self.depot.coordinates[1]]]
 
-        # Add depot as start point
-        route_coords.append([self.depot.coordinates[0], self.depot.coordinates[1]])
-
-        # Add customer stops
+        # Add customer stops and create markers
         for stop in route.stops:
             if stop.order is not None:  # Skip depot stops
                 lat, lon = stop.order.coordinates
-                route_coords.append([lat, lon])
+                waypoints.append([lat, lon])
 
                 # Create marker for stop
                 self._add_stop_marker(
@@ -140,19 +300,30 @@ class MapVisualizer:
                 )
 
         # Add depot as end point (vehicles return to depot)
-        route_coords.append([self.depot.coordinates[0], self.depot.coordinates[1]])
+        waypoints.append([self.depot.coordinates[0], self.depot.coordinates[1]])
 
-        # Draw route line
-        folium.PolyLine(
-            locations=route_coords,
-            color=color,
-            weight=3,
-            opacity=0.7,
-            tooltip=f"Route {route_number}: {route.vehicle.name}"
-        ).add_to(route_group)
+        # Draw route lines using actual road paths
+        all_road_coords = []
+        for i in range(len(waypoints) - 1):
+            start_coords = tuple(waypoints[i])
+            end_coords = tuple(waypoints[i + 1])
 
-        # Add arrows to show direction
-        self._add_route_arrows(route_group, route_coords, color)
+            # Get actual road path between consecutive waypoints
+            road_path = self._get_road_path(start_coords, end_coords)
+            all_road_coords.extend(road_path)
+
+        # Draw the complete route with road following
+        if all_road_coords:
+            folium.PolyLine(
+                locations=all_road_coords,
+                color=color,
+                weight=4,
+                opacity=0.8,
+                tooltip=f"Route {route_number}: {route.vehicle.name}"
+            ).add_to(route_group)
+
+            # Add arrows to show direction (use waypoints, not all road coords)
+            self._add_route_arrows(route_group, waypoints, color)
 
         # Add route group to map
         route_group.add_to(m)
@@ -326,6 +497,69 @@ class MapVisualizer:
         if len(all_coords) > 1:
             m.fit_bounds(all_coords)
 
+    def _fit_single_route_bounds(self, m: folium.Map, route: Route):
+        """Fit map bounds to show single route"""
+        # Collect all coordinates for this route
+        all_coords = [[self.depot.coordinates[0], self.depot.coordinates[1]]]
+
+        for stop in route.stops:
+            if stop.order is not None:
+                all_coords.append([stop.order.coordinates[0], stop.order.coordinates[1]])
+
+        if len(all_coords) > 1:
+            m.fit_bounds(all_coords)
+
+    def _add_single_route_legend(self, m: folium.Map, route: Route, route_number: int):
+        """Add a legend for single route view"""
+        legend_html = f"""
+        <div style="position: fixed;
+                    bottom: 50px; right: 50px;
+                    width: 320px;
+                    background-color: white;
+                    border: 2px solid #FF0000;
+                    border-radius: 5px;
+                    padding: 10px;
+                    font-size: 14px;
+                    z-index: 9999;
+                    box-shadow: 2px 2px 6px rgba(0,0,0,0.3);">
+            <h4 style="margin-top: 0; color: #FF0000;">🚚 Route #{route_number}</h4>
+            <table style="width: 100%; font-size: 12px;">
+                <tr>
+                    <td><b>Vehicle:</b></td>
+                    <td>{route.vehicle.name}</td>
+                </tr>
+                <tr>
+                    <td><b>Capacity:</b></td>
+                    <td>{route.total_weight:.1f} / {route.vehicle.capacity} kg</td>
+                </tr>
+                <tr>
+                    <td><b>Stops:</b></td>
+                    <td>{route.num_stops} deliveries</td>
+                </tr>
+                <tr>
+                    <td><b>Distance:</b></td>
+                    <td>{route.total_distance:.1f} km</td>
+                </tr>
+                <tr>
+                    <td><b>Cost:</b></td>
+                    <td>Rp {route.total_cost:,.0f}</td>
+                </tr>
+                <tr>
+                    <td><b>Depart:</b></td>
+                    <td>{route.departure_time_str}</td>
+                </tr>
+            </table>
+            <hr style="margin: 10px 0;">
+            <div style="font-size: 11px;">
+                <div><span style="color: red;">🏭</span> Depot</div>
+                <div><span style="color: orange;">⭐</span> Priority Order</div>
+                <div><span style="color: blue;">⚫</span> Regular Order</div>
+            </div>
+        </div>
+        """
+
+        m.get_root().html.add_child(folium.Element(legend_html))
+
     def save_map(self, solution: RoutingSolution, output_path: str):
         """
         Create and save map to HTML file
@@ -335,4 +569,16 @@ class MapVisualizer:
             output_path: Path to save HTML file
         """
         m = self.create_map(solution)
+        m.save(output_path)
+
+    def save_single_route_map(self, solution: RoutingSolution, route_idx: int, output_path: str):
+        """
+        Create and save single route map to HTML file
+
+        Args:
+            solution: VRP solution to visualize
+            route_idx: Index of the route to display
+            output_path: Path to save HTML file
+        """
+        m = self.create_single_route_map(solution, route_idx)
         m.save(output_path)

@@ -43,3 +43,4 @@ tzdata==2025.2
 urllib3==2.5.0
 folium==0.19.4
 streamlit-folium==0.24.0
+polyline==2.0.3

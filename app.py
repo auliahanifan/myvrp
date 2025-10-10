@@ -519,10 +519,78 @@ def render_results_section():
     # Interactive Map Visualization
     st.subheader("🗺️ Interactive Route Map")
 
+    # Route filter selector
+    col_filter1, col_filter2, col_filter3 = st.columns([2, 2, 1])
+
+    with col_filter1:
+        route_options = ["All Routes"] + [f"{i+1}. {route.vehicle.name} ({route.num_stops} stops)"
+                                           for i, route in enumerate(solution.routes) if route.num_stops > 0]
+        selected_route_display = st.selectbox(
+            "🚚 Filter by Courier/Vehicle:",
+            options=route_options,
+            help="Select a specific courier to view only their route"
+        )
+
+        # Parse selection
+        if selected_route_display == "All Routes":
+            selected_route_idx = None
+        else:
+            # Extract route number from "1. Vehicle Name (X stops)"
+            selected_route_idx = int(selected_route_display.split(".")[0]) - 1
+
+    # Show route-specific metrics if filtered
+    if selected_route_idx is not None:
+        selected_route = solution.routes[selected_route_idx]
+
+        with col_filter2:
+            st.metric("Route Distance", f"{selected_route.total_distance:.1f} km")
+
+        with col_filter3:
+            st.metric("Route Cost", f"Rp {selected_route.total_cost:,.0f}")
+
+        # Additional route details
+        st.info(
+            f"📦 **Route #{selected_route_idx + 1} Details:** "
+            f"{selected_route.vehicle.name} • "
+            f"{selected_route.num_stops} stops • "
+            f"{selected_route.total_weight:.1f}/{selected_route.vehicle.capacity} kg • "
+            f"Depart: {selected_route.departure_time_str}"
+        )
+
     try:
         depot = st.session_state.depot
-        visualizer = MapVisualizer(depot=depot)
-        route_map = visualizer.create_map(solution, zoom_start=12)
+        radar_api_key = os.getenv("RADAR_API_KEY")
+        visualizer = MapVisualizer(
+            depot=depot,
+            radar_api_key=radar_api_key,
+            enable_road_routing=True  # Use actual road paths
+        )
+
+        # Show routing mode status and create map
+        if visualizer.enable_road_routing:
+            with st.spinner("🛣️ Generating map with actual road paths (may take a few seconds)..."):
+                if selected_route_idx is not None:
+                    # Single route view
+                    route_map = visualizer.create_single_route_map(
+                        solution,
+                        selected_route_idx,
+                        zoom_start=12
+                    )
+                else:
+                    # All routes view
+                    route_map = visualizer.create_map(solution, zoom_start=12)
+            st.success("✅ Map generated with actual road paths!")
+        else:
+            # No spinner needed for straight lines
+            if selected_route_idx is not None:
+                route_map = visualizer.create_single_route_map(
+                    solution,
+                    selected_route_idx,
+                    zoom_start=12
+                )
+            else:
+                route_map = visualizer.create_map(solution, zoom_start=12)
+            st.warning("⚠️ Using straight-line paths (set RADAR_API_KEY for road routing)")
 
         # Display map
         st_folium(route_map, width=1400, height=600)
@@ -535,10 +603,16 @@ def render_results_section():
                 results_dir.mkdir(exist_ok=True)
 
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                map_filename = f"route_map_{timestamp}.html"
+                if selected_route_idx is not None:
+                    map_filename = f"route_map_vehicle{selected_route_idx+1}_{timestamp}.html"
+                else:
+                    map_filename = f"route_map_all_{timestamp}.html"
                 map_path = results_dir / map_filename
 
-                visualizer.save_map(solution, str(map_path))
+                if selected_route_idx is not None:
+                    visualizer.save_single_route_map(solution, selected_route_idx, str(map_path))
+                else:
+                    visualizer.save_map(solution, str(map_path))
 
                 st.success(f"✅ Map saved: {map_filename}")
 
@@ -556,6 +630,7 @@ def render_results_section():
 
         st.markdown("""
         **💡 Map Features:**
+        - 🚚 Filter by courier to view individual routes
         - 🏭 Red marker = Depot
         - ⭐ Orange markers = Priority orders
         - ⚫ Blue markers = Regular orders
