@@ -14,6 +14,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 import tempfile
 import io
+from streamlit_folium import st_folium
 
 # Load environment variables
 load_dotenv()
@@ -26,6 +27,7 @@ from src.utils.yaml_parser import YAMLParser
 from src.utils.distance_calculator import DistanceCalculator
 from src.solver.vrp_solver import VRPSolver
 from src.output.excel_generator import ExcelGenerator
+from src.visualization.map_visualizer import MapVisualizer
 
 
 # Page configuration
@@ -197,8 +199,18 @@ def render_upload_section():
 
                     # Display vehicle types
                     st.subheader("Tipe Kendaraan")
-                    for vehicle_type in fleet.vehicle_types:
-                        st.write(f"**{vehicle_type.name}**: {vehicle_type.capacity} kg @ Rp {vehicle_type.cost_per_km:,}/km")
+                    for vehicle_type, count, unlimited in fleet.vehicle_types:
+                        unlimited_str = " (+ unlimited on-demand)" if unlimited else ""
+                        st.write(f"**{vehicle_type.name}**: {vehicle_type.capacity} kg @ Rp {vehicle_type.cost_per_km:,}/km × {count} unit{unlimited_str}")
+
+                    st.write(f"**Total fixed vehicles**: {fleet.get_max_vehicles()} units")
+
+                    # Display routing config
+                    st.subheader("Routing Configuration")
+                    st.write(f"**Return to depot**: {'Yes' if fleet.return_to_depot else 'No'}")
+                    st.write(f"**Priority time tolerance**: {fleet.priority_time_tolerance} min")
+                    st.write(f"**Non-priority time tolerance**: {fleet.non_priority_time_tolerance} min")
+                    st.write(f"**Multiple trips**: {'Yes' if fleet.multiple_trips else 'No'}")
 
                 except Exception as e:
                     st.markdown(
@@ -234,8 +246,18 @@ def render_upload_section():
 
                     # Display vehicle types
                     st.subheader("Tipe Kendaraan")
-                    for vehicle_type in fleet.vehicle_types:
-                        st.write(f"**{vehicle_type.name}**: {vehicle_type.capacity} kg @ Rp {vehicle_type.cost_per_km:,}/km")
+                    for vehicle_type, count, unlimited in fleet.vehicle_types:
+                        unlimited_str = " (+ unlimited on-demand)" if unlimited else ""
+                        st.write(f"**{vehicle_type.name}**: {vehicle_type.capacity} kg @ Rp {vehicle_type.cost_per_km:,}/km × {count} unit{unlimited_str}")
+
+                    st.write(f"**Total fixed vehicles**: {fleet.get_max_vehicles()} units")
+
+                    # Display routing config
+                    st.subheader("Routing Configuration")
+                    st.write(f"**Return to depot**: {'Yes' if fleet.return_to_depot else 'No'}")
+                    st.write(f"**Priority time tolerance**: {fleet.priority_time_tolerance} min")
+                    st.write(f"**Non-priority time tolerance**: {fleet.non_priority_time_tolerance} min")
+                    st.write(f"**Multiple trips**: {'Yes' if fleet.multiple_trips else 'No'}")
 
                 except Exception as e:
                     st.markdown(
@@ -277,7 +299,7 @@ def render_configuration_section():
             "Time Limit (detik)",
             min_value=60,
             max_value=600,
-            value=300,
+            value=60,
             step=30,
             help="Maksimal waktu untuk solver mencari solusi optimal"
         )
@@ -297,11 +319,11 @@ def render_configuration_section():
             unsafe_allow_html=True
         )
 
-        # Google Maps API status
+        # Radar API status
         api_key = os.getenv("RADAR_API_KEY")
         if api_key and api_key != "your_api_key_here":
             st.markdown(
-                '<div class="success-box">✅ Google Maps API Key configured</div>',
+                '<div class="success-box">✅ Radar API Key configured</div>',
                 unsafe_allow_html=True
             )
         else:
@@ -350,20 +372,36 @@ def render_processing_section(optimization_strategy, time_limit):
                 for o in orders
             ]
 
-            # Step 2: Calculate distance matrix
-            status_text.text("🗺️ Menghitung distance matrix via Google Maps API...")
+            # Step 2: Calculate distance matrix with cache
+            status_text.text("🗺️ Menghitung distance matrix via Radar API...")
             progress_bar.progress(20)
 
             api_key = os.getenv("RADAR_API_KEY")
             if not api_key or api_key == "your_api_key_here":
                 raise ValueError("Radar API key tidak dikonfigurasi. Set RADAR_API_KEY di .env file")
 
-            calculator = DistanceCalculator(api_key=api_key)
+            # Get cache config from YAML
+            parser = YAMLParser("conf.yaml")
+            parser.parse()  # Load data
+            cache_config = parser.get_cache_config()
 
-            with st.spinner("Fetching distances from Radar..."):
+            calculator = DistanceCalculator(
+                api_key=api_key,
+                cache_dir=cache_config.get("directory", ".cache"),
+                cache_ttl_hours=cache_config.get("ttl_hours", 24),
+                enable_cache=cache_config.get("enabled", True)
+            )
+
+            with st.spinner("Fetching distances from Radar (with cache)..."):
                 distance_matrix, duration_matrix = calculator.calculate_matrix(locations)
 
-            status_text.text(f"✅ Distance matrix berhasil dihitung ({len(locations)}x{len(locations)} locations)")
+            # Show cache statistics
+            cache_stats = calculator.get_cache_stats()
+            if cache_stats["cache_hits"] > 0:
+                status_text.text(f"✅ Distance matrix loaded (🔥 cache hit! Saved {cache_stats['api_calls']} API calls)")
+            else:
+                status_text.text(f"✅ Distance matrix calculated ({len(locations)}x{len(locations)} locations, cached for reuse)")
+
             progress_bar.progress(40)
 
             # Step 3: Solve VRP
@@ -478,8 +516,64 @@ def render_results_section():
 
     st.markdown("---")
 
+    # Interactive Map Visualization
+    st.subheader("🗺️ Interactive Route Map")
+
+    try:
+        depot = st.session_state.depot
+        visualizer = MapVisualizer(depot=depot)
+        route_map = visualizer.create_map(solution, zoom_start=12)
+
+        # Display map
+        st_folium(route_map, width=1400, height=600)
+
+        # Option to download map as HTML
+        col_map1, col_map2 = st.columns([3, 1])
+        with col_map2:
+            if st.button("💾 Save Map as HTML", use_container_width=True):
+                results_dir = Path("results")
+                results_dir.mkdir(exist_ok=True)
+
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                map_filename = f"route_map_{timestamp}.html"
+                map_path = results_dir / map_filename
+
+                visualizer.save_map(solution, str(map_path))
+
+                st.success(f"✅ Map saved: {map_filename}")
+
+                # Download button
+                with open(map_path, 'r', encoding='utf-8') as f:
+                    html_content = f.read()
+
+                st.download_button(
+                    label="📥 Download Map HTML",
+                    data=html_content,
+                    file_name=map_filename,
+                    mime="text/html",
+                    use_container_width=True
+                )
+
+        st.markdown("""
+        **💡 Map Features:**
+        - 🏭 Red marker = Depot
+        - ⭐ Orange markers = Priority orders
+        - ⚫ Blue markers = Regular orders
+        - Click markers for detailed info
+        - Use layer control (top right) to toggle routes
+        - Zoom and pan to explore
+        """)
+
+    except Exception as e:
+        st.error(f"❌ Error creating map: {str(e)}")
+        import traceback
+        with st.expander("🔍 Debug info"):
+            st.code(traceback.format_exc())
+
+    st.markdown("---")
+
     # Route preview
-    st.subheader("Preview Routes")
+    st.subheader("📋 Route Details Table")
 
     # Create DataFrame for display
     route_data = []
@@ -616,8 +710,9 @@ def render_sidebar():
         - ✅ Vehicle capacity constraints
         - ✅ Unlimited fleet auto-scaling
         - ✅ 3 optimization strategies
-        - ✅ Google Maps Distance Matrix API
+        - ✅ Radar Distance Matrix API
         - ✅ Professional Excel output
+        - ✅ Interactive map visualization
         - ✅ Historical results tracking
 
         **Constraints:**
@@ -633,9 +728,9 @@ def render_sidebar():
         # Check API key
         api_key = os.getenv("RADAR_API_KEY")
         if api_key and api_key != "your_api_key_here":
-            st.success("✅ Google Maps API")
+            st.success("✅ Radar API")
         else:
-            st.error("❌ Google Maps API")
+            st.error("❌ Radar API")
 
         # Check depot config
         depot_lat = os.getenv("DEPOT_LATITUDE")
@@ -668,7 +763,7 @@ def render_sidebar():
         **🔗 Powered by:**
         - Google OR-Tools
         - Streamlit
-        - Google Maps API
+        - Radar API
         """)
 
 

@@ -1,17 +1,42 @@
 # Vehicle Fleet Configuration for Segarloka
+# Priority: Blind Van -> City Car -> Mobil -> Motor (minimize total vehicles)
+# Ordered by cost (highest to lowest) to minimize vehicle count
 
 vehicles:
-  - name: "Sepeda Motor"
-    capacity: 80  # kg
-    cost_per_km: 1000  # Rupiah per kilometer
+  # Highest priority: Blind Van (most expensive, largest capacity)
+  - name: "Blind Van"
+    capacity: 800  # kg
+    cost_per_km: 10000  # Rupiah per kilometer (HIGHEST)
+    fixed_count: 1  # Only 1 unit available
 
-  - name: "Mobil"
-    capacity: 150  # kg
-    cost_per_km: 3500  # Rupiah per kilometer
+  # Second priority: City Car (high cost, good capacity)
+  - name: "City Car 350kg"
+    capacity: 350  # kg
+    cost_per_km: 6000  # Rupiah per kilometer
+    fixed_count: 2  # 2 units available
 
-  - name: "Minitruck"
+  # Third priority: Mobil (medium cost, medium capacity)
+  - name: "City Car 250kg"
     capacity: 250  # kg
     cost_per_km: 4000  # Rupiah per kilometer
+    fixed_count: 1  # Only 1 unit available
 
-# Unlimited fleet means we can use as many vehicles as needed
-unlimited: true
+  # Last priority: Sepeda Motor (cheapest, smallest capacity, unlimited on-demand)
+  - name: "Sepeda Motor"
+    capacity: 80  # kg
+    cost_per_km: 1500  # Rupiah per kilometer (LOWEST)
+    fixed_count: 15  # 15 base units
+    unlimited: false  # Can add more on demand
+
+# Routing configuration
+routing:
+  return_to_depot: true  # Set to false if vehicles can end anywhere
+  priority_time_tolerance: 0  # Priority orders must be within time window (in minutes)
+  non_priority_time_tolerance: 20  # Non-priority can be late up to 20 minutes
+  multiple_trips: true  # Allow vehicles to do multiple trips per day
+
+# Cache configuration for Radar API (cost optimization)
+cache:
+  enabled: true  # Enable/disable distance matrix caching
+  ttl_hours: 72  # Cache time-to-live in hours (default: 24)
+  directory: ".cache"  # Directory for cache files

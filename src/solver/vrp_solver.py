@@ -71,6 +71,9 @@ class VRPSolver:
                 f"number of locations {n_locations}"
             )
 
+        # Get all vehicles from fleet
+        self.vehicles = fleet.get_all_vehicles()
+
         # Initialize OR-Tools components
         self.manager = None
         self.routing = None
@@ -97,9 +100,11 @@ class VRPSolver:
         start_time = time_module.time()
 
         # Determine number of vehicles to use
-        # For unlimited fleet, we start with a generous upper bound
-        # Need enough vehicles to handle time window constraints (not just capacity)
-        num_vehicles = min(len(self.orders), 50)  # Start with up to 50 vehicles
+        # Start with fixed vehicles, add buffer if unlimited available
+        num_vehicles = len(self.vehicles)
+        if self.fleet.has_unlimited():
+            # Add extra capacity if we have unlimited vehicles
+            num_vehicles = min(num_vehicles + len(self.orders), num_vehicles + 50)
 
         # Create routing index manager
         self.manager = pywrapcp.RoutingIndexManager(
@@ -233,7 +238,7 @@ class VRPSolver:
         )
 
     def _add_time_window_constraint(self):
-        """Add time window constraint (HARD constraint)."""
+        """Add time window constraint with tolerance for non-priority orders."""
         # Time dimension
         self.routing.AddDimension(
             self.time_callback_index,
@@ -249,13 +254,22 @@ class VRPSolver:
         for loc_idx, order in enumerate(self.orders):
             index = self.manager.NodeToIndex(loc_idx + 1)  # +1 because depot is 0
 
-            # HARD time window constraint - must arrive exactly at delivery time
-            # Using the same value for start and end makes it a hard constraint
             time_window_start = order.time_window_start
             time_window_end = order.time_window_end
 
+            # Apply tolerance based on priority
+            if order.is_priority:
+                # Priority orders: strict time window (no tolerance)
+                tolerance = self.fleet.priority_time_tolerance
+            else:
+                # Non-priority orders: allow up to 20 minutes late
+                tolerance = self.fleet.non_priority_time_tolerance
+
+            # Adjust time window end with tolerance
+            time_window_end_adjusted = time_window_end + tolerance
+
             time_dimension.CumulVar(index).SetRange(
-                time_window_start, time_window_end
+                time_window_start, time_window_end_adjusted
             )
 
         # Set time windows for depot (always available)

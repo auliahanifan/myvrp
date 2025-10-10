@@ -6,7 +6,9 @@ import requests
 import pickle
 import hashlib
 import os
-from typing import List, Tuple, Dict
+import time
+from datetime import datetime, timedelta
+from typing import List, Tuple, Dict, Optional
 import numpy as np
 from ..models.location import Location
 
@@ -22,13 +24,21 @@ class DistanceCalculator:
     Implements caching to minimize API calls and costs.
     """
 
-    def __init__(self, api_key: str, cache_dir: str = ".cache"):
+    def __init__(
+        self,
+        api_key: str,
+        cache_dir: str = ".cache",
+        cache_ttl_hours: int = 24,
+        enable_cache: bool = True
+    ):
         """
         Initialize distance calculator.
 
         Args:
             api_key: Radar API key
             cache_dir: Directory for caching API responses
+            cache_ttl_hours: Cache time-to-live in hours (default: 24)
+            enable_cache: Enable/disable caching (default: True)
         """
         if not api_key:
             raise DistanceCalculatorError("Radar API key is required")
@@ -36,18 +46,27 @@ class DistanceCalculator:
         self.api_key = api_key
         self.cache_dir = cache_dir
         self.base_url = "https://api.radar.io/v1"
+        self.cache_ttl_hours = cache_ttl_hours
+        self.enable_cache = enable_cache
+
+        # Cache statistics
+        self.cache_hits = 0
+        self.cache_misses = 0
+        self.api_calls = 0
 
         # Create cache directory if it doesn't exist
-        os.makedirs(cache_dir, exist_ok=True)
+        if enable_cache:
+            os.makedirs(cache_dir, exist_ok=True)
 
     def calculate_matrix(
-        self, locations: List[Location]
+        self, locations: List[Location], force_refresh: bool = False
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
         Calculate distance and duration matrices for all locations.
 
         Args:
             locations: List of Location objects (depot + customers)
+            force_refresh: Force API call even if cache exists
 
         Returns:
             Tuple of (distance_matrix, duration_matrix)
@@ -60,11 +79,14 @@ class DistanceCalculator:
         if not locations:
             raise DistanceCalculatorError("Location list cannot be empty")
 
-        # Check cache first
+        # Check cache first (if enabled and not forcing refresh)
         cache_key = self._generate_cache_key(locations)
-        cached_result = self._load_from_cache(cache_key)
-        if cached_result is not None:
-            return cached_result
+        if self.enable_cache and not force_refresh:
+            cached_result = self._load_from_cache(cache_key)
+            if cached_result is not None:
+                self.cache_hits += 1
+                return cached_result
+            self.cache_misses += 1
 
         # Extract coordinates
         coordinates = [loc.to_tuple() for loc in locations]
@@ -77,7 +99,7 @@ class DistanceCalculator:
         # Radar API supports multiple origins and destinations in a single request
         # Format: origins=lat1,lng1|lat2,lng2&destinations=lat3,lng3|lat4,lng4
         # Using batches to avoid hitting URL length limits (typically ~2000 chars)
-        batch_size = 25  # Conservative batch size for URL length
+        batch_size = 200  # Conservative batch size for URL length
 
         try:
             for i in range(0, n, batch_size):
@@ -87,6 +109,7 @@ class DistanceCalculator:
                     destinations_batch = coordinates[j : min(j + batch_size, n)]
 
                     # Call Radar Distance Matrix API
+                    self.api_calls += 1
                     result = self._call_radar_matrix_api(
                         origins_batch, destinations_batch
                     )
@@ -105,8 +128,9 @@ class DistanceCalculator:
         except Exception as e:
             raise DistanceCalculatorError(f"Error calling Radar API: {str(e)}")
 
-        # Cache the result
-        self._save_to_cache(cache_key, (distance_matrix, duration_matrix))
+        # Cache the result with metadata
+        if self.enable_cache:
+            self._save_to_cache(cache_key, (distance_matrix, duration_matrix))
 
         return distance_matrix, duration_matrix
 
@@ -240,15 +264,15 @@ class DistanceCalculator:
 
     def _load_from_cache(
         self, cache_key: str
-    ) -> Tuple[np.ndarray, np.ndarray] | None:
+    ) -> Optional[Tuple[np.ndarray, np.ndarray]]:
         """
-        Load distance and duration matrices from cache.
+        Load distance and duration matrices from cache with TTL check.
 
         Args:
             cache_key: Cache key
 
         Returns:
-            Tuple of (distance_matrix, duration_matrix) or None if not cached
+            Tuple of (distance_matrix, duration_matrix) or None if not cached/expired
         """
         cache_path = self._get_cache_path(cache_key)
 
@@ -256,17 +280,38 @@ class DistanceCalculator:
             return None
 
         try:
+            # Check if cache is expired
+            file_age = time.time() - os.path.getmtime(cache_path)
+            cache_ttl_seconds = self.cache_ttl_hours * 3600
+
+            if file_age > cache_ttl_seconds:
+                # Cache expired, delete it
+                os.remove(cache_path)
+                return None
+
             with open(cache_path, "rb") as f:
-                return pickle.load(f)
+                cached_data = pickle.load(f)
+
+            # Support both old format (tuple) and new format (dict with metadata)
+            if isinstance(cached_data, dict):
+                return (cached_data["distance_matrix"], cached_data["duration_matrix"])
+            else:
+                # Old format, just return the tuple
+                return cached_data
+
         except Exception:
-            # If cache is corrupted, return None
+            # If cache is corrupted, delete it and return None
+            try:
+                os.remove(cache_path)
+            except:
+                pass
             return None
 
     def _save_to_cache(
         self, cache_key: str, data: Tuple[np.ndarray, np.ndarray]
     ):
         """
-        Save distance and duration matrices to cache.
+        Save distance and duration matrices to cache with metadata.
 
         Args:
             cache_key: Cache key
@@ -275,8 +320,15 @@ class DistanceCalculator:
         cache_path = self._get_cache_path(cache_key)
 
         try:
+            # Save with metadata
+            cache_data = {
+                "distance_matrix": data[0],
+                "duration_matrix": data[1],
+                "cached_at": datetime.now().isoformat(),
+                "ttl_hours": self.cache_ttl_hours,
+            }
             with open(cache_path, "wb") as f:
-                pickle.dump(data, f)
+                pickle.dump(cache_data, f)
         except Exception:
             # If caching fails, just continue without caching
             pass
@@ -305,3 +357,51 @@ class DistanceCalculator:
                 if f.startswith("distance_matrix_")
             ]
         )
+
+    def get_cache_stats(self) -> Dict:
+        """
+        Get cache statistics.
+
+        Returns:
+            Dictionary with cache statistics
+        """
+        total_requests = self.cache_hits + self.cache_misses
+        hit_rate = (self.cache_hits / total_requests * 100) if total_requests > 0 else 0
+
+        return {
+            "cache_hits": self.cache_hits,
+            "cache_misses": self.cache_misses,
+            "total_requests": total_requests,
+            "hit_rate_percent": round(hit_rate, 2),
+            "api_calls": self.api_calls,
+            "cached_files": self.get_cache_size(),
+            "cache_enabled": self.enable_cache,
+            "cache_ttl_hours": self.cache_ttl_hours,
+        }
+
+    def clear_expired_cache(self) -> int:
+        """
+        Clear only expired cache files.
+
+        Returns:
+            Number of files deleted
+        """
+        if not os.path.exists(self.cache_dir):
+            return 0
+
+        deleted_count = 0
+        cache_ttl_seconds = self.cache_ttl_hours * 3600
+
+        for filename in os.listdir(self.cache_dir):
+            if filename.startswith("distance_matrix_"):
+                filepath = os.path.join(self.cache_dir, filename)
+                file_age = time.time() - os.path.getmtime(filepath)
+
+                if file_age > cache_ttl_seconds:
+                    try:
+                        os.remove(filepath)
+                        deleted_count += 1
+                    except:
+                        pass
+
+        return deleted_count

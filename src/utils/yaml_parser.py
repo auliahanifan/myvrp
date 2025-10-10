@@ -19,13 +19,22 @@ class YAMLParser:
     Expected format:
     ```yaml
     vehicles:
-      - name: "L300"
+      - name: "Blind Van"
         capacity: 800  # kg
         cost_per_km: 5000  # Rupiah
-      - name: "Granmax"
-        capacity: 500
-        cost_per_km: 3500
-    unlimited: true  # optional, defaults to true
+        fixed_count: 1  # number of this vehicle type
+        unlimited: false  # optional, if this type can spawn more
+      - name: "Sepeda Motor"
+        capacity: 80
+        cost_per_km: 1500
+        fixed_count: 15
+        unlimited: true  # can add more on demand
+
+    routing:
+      return_to_depot: true
+      priority_time_tolerance: 0
+      non_priority_time_tolerance: 20
+      multiple_trips: true
     ```
     """
 
@@ -66,28 +75,53 @@ class YAMLParser:
         if "vehicles" not in self.data:
             raise YAMLParserError("YAML file must contain 'vehicles' key")
 
-        # Parse vehicles
-        vehicles = self._parse_vehicles()
+        # Parse vehicles with their counts
+        vehicle_types = self._parse_vehicles()
 
-        # Parse unlimited flag
-        unlimited = self.data.get("unlimited", True)
-        if not isinstance(unlimited, bool):
-            raise YAMLParserError("'unlimited' must be a boolean value")
+        # Parse routing config
+        routing_config = self.data.get("routing", {})
+        return_to_depot = routing_config.get("return_to_depot", True)
+        priority_time_tolerance = routing_config.get("priority_time_tolerance", 0)
+        non_priority_time_tolerance = routing_config.get("non_priority_time_tolerance", 20)
+        multiple_trips = routing_config.get("multiple_trips", True)
 
         # Create fleet
         try:
-            fleet = VehicleFleet(vehicle_types=vehicles, unlimited=unlimited)
+            fleet = VehicleFleet(
+                vehicle_types=vehicle_types,
+                return_to_depot=return_to_depot,
+                priority_time_tolerance=priority_time_tolerance,
+                non_priority_time_tolerance=non_priority_time_tolerance,
+                multiple_trips=multiple_trips,
+            )
         except Exception as e:
             raise YAMLParserError(f"Error creating vehicle fleet: {str(e)}")
 
         return fleet
 
-    def _parse_vehicles(self) -> List[Vehicle]:
+    def get_cache_config(self) -> dict:
+        """
+        Parse cache configuration from YAML.
+
+        Returns:
+            Dictionary with cache configuration
+        """
+        if self.data is None:
+            return {}
+
+        cache_config = self.data.get("cache", {})
+        return {
+            "enabled": cache_config.get("enabled", True),
+            "ttl_hours": cache_config.get("ttl_hours", 24),
+            "directory": cache_config.get("directory", ".cache"),
+        }
+
+    def _parse_vehicles(self) -> List[tuple[Vehicle, int, bool]]:
         """
         Parse vehicles list from YAML data.
 
         Returns:
-            List of Vehicle objects
+            List of tuples (Vehicle, count, unlimited)
 
         Raises:
             YAMLParserError: If vehicle data is invalid
@@ -100,17 +134,17 @@ class YAMLParser:
         if not vehicles_data:
             raise YAMLParserError("'vehicles' list cannot be empty")
 
-        vehicles = []
+        vehicle_types = []
         for idx, vehicle_data in enumerate(vehicles_data):
             try:
-                vehicle = self._parse_vehicle(vehicle_data, idx)
-                vehicles.append(vehicle)
+                vehicle, count, unlimited = self._parse_vehicle(vehicle_data, idx)
+                vehicle_types.append((vehicle, count, unlimited))
             except Exception as e:
                 raise YAMLParserError(f"Error parsing vehicle {idx}: {str(e)}")
 
-        return vehicles
+        return vehicle_types
 
-    def _parse_vehicle(self, vehicle_data: dict, idx: int) -> Vehicle:
+    def _parse_vehicle(self, vehicle_data: dict, idx: int) -> tuple[Vehicle, int, bool]:
         """
         Parse a single vehicle from YAML data.
 
@@ -119,7 +153,7 @@ class YAMLParser:
             idx: Vehicle index (for error messages)
 
         Returns:
-            Vehicle object
+            Tuple of (Vehicle object, count, unlimited)
 
         Raises:
             ValueError: If vehicle data is invalid
@@ -128,7 +162,7 @@ class YAMLParser:
             raise ValueError("Vehicle data must be a dictionary")
 
         # Check required fields
-        required_fields = ["name", "capacity", "cost_per_km"]
+        required_fields = ["name", "capacity", "cost_per_km", "fixed_count"]
         for field in required_fields:
             if field not in vehicle_data:
                 raise ValueError(f"Missing required field: {field}")
@@ -148,14 +182,30 @@ class YAMLParser:
         except (ValueError, TypeError):
             raise ValueError(f"Invalid cost_per_km: {vehicle_data['cost_per_km']}")
 
+        try:
+            fixed_count = int(vehicle_data["fixed_count"])
+            if fixed_count <= 0:
+                raise ValueError("fixed_count must be positive")
+        except (ValueError, TypeError):
+            raise ValueError(f"Invalid fixed_count: {vehicle_data['fixed_count']}")
+
+        # Parse unlimited flag (optional, defaults to False)
+        unlimited = vehicle_data.get("unlimited", False)
+        if not isinstance(unlimited, bool):
+            raise ValueError("'unlimited' must be a boolean value")
+
+        # Calculate fixed cost based on cost_per_km (higher cost = use first to minimize vehicles)
+        fixed_cost = cost_per_km * 10  # Base fixed cost proportional to per-km cost
+
         # Create Vehicle object (validation happens in __post_init__)
         vehicle = Vehicle(
             name=name.strip(),
             capacity=capacity,
             cost_per_km=cost_per_km,
+            fixed_cost=fixed_cost,
         )
 
-        return vehicle
+        return vehicle, fixed_count, unlimited
 
     def get_summary(self) -> dict:
         """
