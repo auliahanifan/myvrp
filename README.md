@@ -38,7 +38,7 @@ seg-vrp/
 
 #### 1.1 Project Setup ✅
 - Python project with `pyproject.toml` and `requirements.txt`
-- Dependencies: OR-Tools, Pandas, NumPy, openpyxl, PyYAML, googlemaps, streamlit
+- Dependencies: OR-Tools, Pandas, NumPy, openpyxl, PyYAML, requests, streamlit
 - Complete folder structure with all required directories
 
 #### 1.2 Data Models ✅
@@ -75,9 +75,9 @@ seg-vrp/
   - Validates vehicle specs (capacity, cost)
   - Supports unlimited fleet configuration
 
-#### 1.4 Google Maps Integration ✅
+#### 1.4 Radar API Integration ✅
 - **Distance Calculator** (`src/utils/distance_calculator.py`)
-  - Google Maps Distance Matrix API client
+  - Radar Distance Matrix API client
   - Calculates distance and duration matrices
   - Intelligent caching to minimize API calls
   - Batch processing for large location sets
@@ -111,7 +111,7 @@ uv sync
 
 # Configure environment
 cp .env.example .env
-# Edit .env and add your Google Maps API key
+# Edit .env and add your Radar API key
 ```
 
 ### 2. Prepare Input Files
@@ -182,7 +182,7 @@ Phase 2 will implement the Excel output generator:
 3. **Balanced**: Balances both objectives (uses Automatic metaheuristic)
 
 ### API Integration
-- Google Maps Distance Matrix API for accurate distances
+- Radar Distance Matrix API for accurate distances
 - Caching system to minimize API calls and costs
 - Batch processing for large datasets (25×25 chunks)
 
@@ -191,7 +191,7 @@ Phase 2 will implement the Excel output generator:
 Required in `.env` file:
 
 ```env
-GOOGLE_MAPS_API_KEY=your_api_key_here
+RADAR_API_KEY=your_radar_api_key_here
 DEPOT_LATITUDE=-6.2088
 DEPOT_LONGITUDE=106.8456
 DEPOT_NAME=Segarloka Warehouse

@@ -21,9 +21,9 @@ def main():
 
     # Load environment variables
     load_dotenv()
-    api_key = os.getenv("GOOGLE_MAPS_API_KEY")
+    api_key = os.getenv("RADAR_API_KEY")
     if not api_key:
-        print("❌ ERROR: GOOGLE_MAPS_API_KEY not found in .env file")
+        print("❌ ERROR: RADAR_API_KEY not found in .env file")
         return
 
     # Parse inputs

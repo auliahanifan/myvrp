@@ -298,7 +298,7 @@ def render_configuration_section():
         )
 
         # Google Maps API status
-        api_key = os.getenv("GOOGLE_MAPS_API_KEY")
+        api_key = os.getenv("RADAR_API_KEY")
         if api_key and api_key != "your_api_key_here":
             st.markdown(
                 '<div class="success-box">✅ Google Maps API Key configured</div>',
@@ -306,8 +306,8 @@ def render_configuration_section():
             )
         else:
             st.markdown(
-                '<div class="error-box">❌ Google Maps API Key not configured!<br>'
-                'Set GOOGLE_MAPS_API_KEY in .env file</div>',
+                '<div class="error-box">❌ Radar API Key not configured!<br>'
+                'Set RADAR_API_KEY in .env file</div>',
                 unsafe_allow_html=True
             )
 
@@ -354,13 +354,13 @@ def render_processing_section(optimization_strategy, time_limit):
             status_text.text("🗺️ Menghitung distance matrix via Google Maps API...")
             progress_bar.progress(20)
 
-            api_key = os.getenv("GOOGLE_MAPS_API_KEY")
+            api_key = os.getenv("RADAR_API_KEY")
             if not api_key or api_key == "your_api_key_here":
-                raise ValueError("Google Maps API key tidak dikonfigurasi. Set GOOGLE_MAPS_API_KEY di .env file")
+                raise ValueError("Radar API key tidak dikonfigurasi. Set RADAR_API_KEY di .env file")
 
             calculator = DistanceCalculator(api_key=api_key)
 
-            with st.spinner("Fetching distances from Google Maps..."):
+            with st.spinner("Fetching distances from Radar..."):
                 distance_matrix, duration_matrix = calculator.calculate_matrix(locations)
 
             status_text.text(f"✅ Distance matrix berhasil dihitung ({len(locations)}x{len(locations)} locations)")
@@ -631,7 +631,7 @@ def render_sidebar():
         st.header("🔧 System Status")
 
         # Check API key
-        api_key = os.getenv("GOOGLE_MAPS_API_KEY")
+        api_key = os.getenv("RADAR_API_KEY")
         if api_key and api_key != "your_api_key_here":
             st.success("✅ Google Maps API")
         else:

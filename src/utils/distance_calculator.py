@@ -1,13 +1,12 @@
 """
-Distance calculator using Google Maps Distance Matrix API.
+Distance calculator using Radar Distance Matrix API.
 Calculates distance and duration matrices with caching support.
 """
-import googlemaps
+import requests
 import pickle
 import hashlib
 import os
 from typing import List, Tuple, Dict
-from datetime import datetime
 import numpy as np
 from ..models.location import Location
 
@@ -19,7 +18,7 @@ class DistanceCalculatorError(Exception):
 
 class DistanceCalculator:
     """
-    Calculator for distance and duration matrices using Google Maps API.
+    Calculator for distance and duration matrices using Radar API.
     Implements caching to minimize API calls and costs.
     """
 
@@ -28,15 +27,15 @@ class DistanceCalculator:
         Initialize distance calculator.
 
         Args:
-            api_key: Google Maps API key
+            api_key: Radar API key
             cache_dir: Directory for caching API responses
         """
         if not api_key:
-            raise DistanceCalculatorError("Google Maps API key is required")
+            raise DistanceCalculatorError("Radar API key is required")
 
         self.api_key = api_key
         self.cache_dir = cache_dir
-        self.client = googlemaps.Client(key=api_key)
+        self.base_url = "https://api.radar.io/v1"
 
         # Create cache directory if it doesn't exist
         os.makedirs(cache_dir, exist_ok=True)
@@ -75,9 +74,10 @@ class DistanceCalculator:
         distance_matrix = np.zeros((n, n))
         duration_matrix = np.zeros((n, n))
 
-        # Google Maps API has a limit of 100 elements per request (origins × destinations ≤ 100)
-        # Using 10×10 batches = 100 elements per request (maximum safe limit)
-        batch_size = 10
+        # Radar API supports multiple origins and destinations in a single request
+        # Format: origins=lat1,lng1|lat2,lng2&destinations=lat3,lng3|lat4,lng4
+        # Using batches to avoid hitting URL length limits (typically ~2000 chars)
+        batch_size = 25  # Conservative batch size for URL length
 
         try:
             for i in range(0, n, batch_size):
@@ -86,13 +86,9 @@ class DistanceCalculator:
                 for j in range(0, n, batch_size):
                     destinations_batch = coordinates[j : min(j + batch_size, n)]
 
-                    # Call Distance Matrix API
-                    result = self.client.distance_matrix(
-                        origins=origins_batch,
-                        destinations=destinations_batch,
-                        mode="driving",
-                        units="metric",
-                        departure_time=datetime.now(),  # For traffic data
+                    # Call Radar Distance Matrix API
+                    result = self._call_radar_matrix_api(
+                        origins_batch, destinations_batch
                     )
 
                     # Parse results
@@ -104,17 +100,60 @@ class DistanceCalculator:
                         j,
                     )
 
-        except googlemaps.exceptions.ApiError as e:
-            raise DistanceCalculatorError(f"Google Maps API error: {str(e)}")
-        except googlemaps.exceptions.Timeout as e:
-            raise DistanceCalculatorError(f"Google Maps API timeout: {str(e)}")
+        except requests.exceptions.RequestException as e:
+            raise DistanceCalculatorError(f"Radar API request error: {str(e)}")
         except Exception as e:
-            raise DistanceCalculatorError(f"Error calling Google Maps API: {str(e)}")
+            raise DistanceCalculatorError(f"Error calling Radar API: {str(e)}")
 
         # Cache the result
         self._save_to_cache(cache_key, (distance_matrix, duration_matrix))
 
         return distance_matrix, duration_matrix
+
+    def _call_radar_matrix_api(
+        self, origins: List[Tuple[float, float]], destinations: List[Tuple[float, float]]
+    ) -> dict:
+        """
+        Call Radar Distance Matrix API.
+
+        Args:
+            origins: List of (latitude, longitude) tuples
+            destinations: List of (latitude, longitude) tuples
+
+        Returns:
+            API response as dictionary
+
+        Raises:
+            DistanceCalculatorError: If API call fails
+        """
+        # Format coordinates: "lat,lng|lat,lng|..."
+        origins_str = "|".join(f"{lat},{lng}" for lat, lng in origins)
+        destinations_str = "|".join(f"{lat},{lng}" for lat, lng in destinations)
+
+        url = f"{self.base_url}/route/matrix"
+        params = {
+            "origins": origins_str,
+            "destinations": destinations_str,
+            "mode": "car",
+            "units": "metric",
+        }
+        headers = {"Authorization": self.api_key}
+
+        response = requests.get(url, params=params, headers=headers, timeout=30)
+
+        if response.status_code != 200:
+            raise DistanceCalculatorError(
+                f"Radar API returned status {response.status_code}: {response.text}"
+            )
+
+        data = response.json()
+
+        if data.get("meta", {}).get("code") != 200:
+            raise DistanceCalculatorError(
+                f"Radar API error: {data.get('meta', {})}"
+            )
+
+        return data
 
     def _parse_api_response(
         self,
@@ -125,7 +164,7 @@ class DistanceCalculator:
         col_offset: int,
     ):
         """
-        Parse Google Maps API response and fill matrices.
+        Parse Radar API response and fill matrices.
 
         Args:
             response: API response dictionary
@@ -137,30 +176,37 @@ class DistanceCalculator:
         Raises:
             DistanceCalculatorError: If response is invalid
         """
-        if response["status"] != "OK":
-            raise DistanceCalculatorError(
-                f"API returned status: {response['status']}"
-            )
+        matrix = response.get("matrix", [])
 
-        rows = response.get("rows", [])
-        for i, row in enumerate(rows):
-            elements = row.get("elements", [])
-            for j, element in enumerate(elements):
-                if element["status"] == "OK":
-                    # Distance in kilometers
-                    distance_m = element["distance"]["value"]
+        if not matrix:
+            raise DistanceCalculatorError("Empty matrix in API response")
+
+        # Radar returns matrix as a 2D array: matrix[origin_index][destination_index]
+        for origin_idx, row in enumerate(matrix):
+            for route in row:
+                dest_idx = route.get("destinationIndex")
+
+                if dest_idx is None:
+                    continue
+
+                # Check if route was found
+                distance_data = route.get("distance", {})
+                duration_data = route.get("duration", {})
+
+                if distance_data and duration_data:
+                    # Distance in kilometers (Radar returns meters)
+                    distance_m = distance_data.get("value", 0)
                     distance_km = distance_m / 1000.0
 
-                    # Duration in minutes
-                    duration_s = element["duration"]["value"]
-                    duration_min = duration_s / 60.0
+                    # Duration in minutes (Radar returns minutes as float)
+                    duration_min = duration_data.get("value", 0)
 
-                    distance_matrix[row_offset + i, col_offset + j] = distance_km
-                    duration_matrix[row_offset + i, col_offset + j] = duration_min
+                    distance_matrix[row_offset + origin_idx, col_offset + dest_idx] = distance_km
+                    duration_matrix[row_offset + origin_idx, col_offset + dest_idx] = duration_min
                 else:
                     # If route not found, use large penalty value
-                    distance_matrix[row_offset + i, col_offset + j] = 999999
-                    duration_matrix[row_offset + i, col_offset + j] = 999999
+                    distance_matrix[row_offset + origin_idx, col_offset + dest_idx] = 999999
+                    duration_matrix[row_offset + origin_idx, col_offset + dest_idx] = 999999
 
     def _generate_cache_key(self, locations: List[Location]) -> str:
         """
