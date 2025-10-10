@@ -97,8 +97,9 @@ class VRPSolver:
         start_time = time_module.time()
 
         # Determine number of vehicles to use
-        # For unlimited fleet, we start with a reasonable upper bound
-        num_vehicles = min(len(self.orders), 20)  # Start with up to 20 vehicles
+        # For unlimited fleet, we start with a generous upper bound
+        # Need enough vehicles to handle time window constraints (not just capacity)
+        num_vehicles = min(len(self.orders), 50)  # Start with up to 50 vehicles
 
         # Create routing index manager
         self.manager = pywrapcp.RoutingIndexManager(
@@ -119,6 +120,12 @@ class VRPSolver:
         self._add_capacity_constraint()
         self._add_time_window_constraint()
 
+        # Allow dropping nodes (orders) if they can't be satisfied
+        # This prevents the solver from failing completely
+        penalty = 1000000  # High penalty for dropping orders
+        for node in range(1, len(self.locations)):
+            self.routing.AddDisjunction([self.manager.NodeToIndex(node)], penalty)
+
         # Set search parameters
         search_parameters = self._get_search_parameters(
             optimization_strategy, time_limit
@@ -128,7 +135,26 @@ class VRPSolver:
         self.solution = self.routing.SolveWithParameters(search_parameters)
 
         if not self.solution:
-            raise VRPSolverError("No solution found. Check constraints and data.")
+            # Get status code for better error message
+            status = self.routing.status()
+            status_names = {
+                0: "ROUTING_NOT_SOLVED",
+                1: "ROUTING_SUCCESS",
+                2: "ROUTING_FAIL",
+                3: "ROUTING_FAIL_TIMEOUT",
+                4: "ROUTING_INVALID",
+            }
+            status_name = status_names.get(status, f"UNKNOWN({status})")
+
+            raise VRPSolverError(
+                f"No solution found (Status: {status_name}).\n"
+                f"Possible causes:\n"
+                f"  - Time window constraints too tight (check delivery_time ranges)\n"
+                f"  - Insufficient vehicles (currently using {num_vehicles} vehicles)\n"
+                f"  - Distance/time matrix has unreachable locations\n"
+                f"  - Capacity constraints impossible to satisfy\n"
+                f"Try: Increase time_limit, relax time windows, or check input data."
+            )
 
         # Extract solution
         computation_time = time_module.time() - start_time
@@ -261,8 +287,9 @@ class VRPSolver:
         search_parameters.time_limit.seconds = time_limit
 
         # Set first solution strategy
+        # PARALLEL_CHEAPEST_INSERTION is more robust for problems with time windows
         search_parameters.first_solution_strategy = (
-            routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+            routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION
         )
 
         # Set local search metaheuristic
@@ -282,8 +309,8 @@ class VRPSolver:
                 routing_enums_pb2.LocalSearchMetaheuristic.AUTOMATIC
             )
 
-        # Log search progress
-        search_parameters.log_search = False
+        # Enable logging for debugging (can be disabled in production)
+        search_parameters.log_search = True
 
         return search_parameters
 

@@ -75,9 +75,9 @@ class DistanceCalculator:
         distance_matrix = np.zeros((n, n))
         duration_matrix = np.zeros((n, n))
 
-        # Google Maps API has a limit of 25 origins x 25 destinations per request
-        # We'll batch the requests to stay within limits
-        batch_size = 25
+        # Google Maps API has a limit of 100 elements per request (origins × destinations ≤ 100)
+        # Using 10×10 batches = 100 elements per request (maximum safe limit)
+        batch_size = 10
 
         try:
             for i in range(0, n, batch_size):

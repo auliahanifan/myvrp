@@ -64,64 +64,67 @@ Build a web-based VRP (Vehicle Routing Problem) solver untuk optimasi routing pe
 
 ---
 
-## 📊 Phase 2: Output Generator
+## 📊 Phase 2: Output Generator ✅ COMPLETE
 
 ### 2.1 Excel Output Generator
-- [ ] Generate Excel dengan 2 sheets:
+- [x] Generate Excel dengan 2 sheets:
 
   **Sheet 1: "Routes by Vehicle"**
-  - [ ] Columns: Vehicle Name, Delivery Time, Customer, Address, Rate, Weight, Arrival Time, Departure Time, Distance, Cumulative Weight, Sequence, Lat/Long, Notes
-  - [ ] Group by vehicle (dengan Excel outline/grouping feature)
-  - [ ] Subtotal rows per vehicle (total cost, total weight)
-  - [ ] Color coding untuk priority orders (kuning/merah)
-  - [ ] Format currency untuk cost (Rp xxx,xxx)
-  - [ ] Format time (HH:MM)
+  - [x] Columns: Vehicle Name, Delivery Time, Customer, Address, Rate, Weight, Arrival Time, Departure Time, Distance, Cumulative Weight, Sequence, Lat/Long, Notes
+  - [x] Group by vehicle (dengan Excel outline/grouping feature)
+  - [x] Subtotal rows per vehicle (total cost, total weight)
+  - [x] Color coding untuk priority orders (kuning/merah)
+  - [x] Format currency untuk cost (Rp xxx,xxx)
+  - [x] Format time (HH:MM)
 
   **Sheet 2: "Summary"**
-  - [ ] Total vehicles used
-  - [ ] Total distance (km)
-  - [ ] Total cost (Rp)
-  - [ ] Total orders delivered
-  - [ ] Optimization strategy used
-  - [ ] Depot location
-  - [ ] Generated timestamp
+  - [x] Total vehicles used
+  - [x] Total distance (km)
+  - [x] Total cost (Rp)
+  - [x] Total orders delivered
+  - [x] Optimization strategy used
+  - [x] Depot location
+  - [x] Generated timestamp
 
-- [ ] Filename dengan timestamp: `routing_result_YYYY-MM-DD_HH-MM-SS.xlsx`
-- [ ] Save to `results/` folder untuk historical tracking
+- [x] Filename dengan timestamp: `routing_result_YYYY-MM-DD_HH-MM-SS.xlsx`
+- [x] Save to `results/` folder untuk historical tracking
 
 ---
 
-## 🖥️ Phase 3: Web Interface (Streamlit)
+## 🖥️ Phase 3: Web Interface (Streamlit) ✅ COMPLETE
 
 ### 3.1 UI Components
-- [ ] **Upload Section**
-  - CSV file uploader
-  - Preview uploaded data (show first 10 rows)
-  - Validation feedback (error messages jika ada invalid data)
+- [x] **Upload Section**
+  - [x] CSV file uploader
+  - [x] Preview uploaded data (show first 10 rows)
+  - [x] Validation feedback (error messages jika ada invalid data)
+  - [x] Data statistics (total orders, weight, priority count)
 
-- [ ] **Configuration Section**
-  - Radio button untuk optimization strategy:
+- [x] **Configuration Section**
+  - [x] Radio button untuk optimization strategy:
     - ⚙️ Minimize Vehicles
     - 💰 Minimize Cost
     - ⚖️ Balanced
-  - Input depot location (lat, long) - untuk sekarang hardcoded, tapi bisa editable
-  - Display vehicle config (from YAML)
+  - [x] Input depot location (lat, long) - loaded from .env file
+  - [x] Display vehicle config (from YAML)
+  - [x] Time limit slider (60-600 seconds)
 
-- [ ] **Processing Section**
-  - "Generate Routes" button
-  - Progress bar/spinner saat computing
-  - Status messages (fetching distances, solving VRP, generating Excel, etc)
+- [x] **Processing Section**
+  - [x] "Generate Routes" button
+  - [x] Progress bar/spinner saat computing
+  - [x] Status messages (fetching distances, solving VRP, generating Excel, etc)
+  - [x] Error handling with detailed messages
 
-- [ ] **Results Section**
-  - Display summary metrics (total vehicles, distance, cost)
-  - Preview route results (table view)
-  - Download button untuk Excel file
-  - Link untuk view historical results
+- [x] **Results Section**
+  - [x] Display summary metrics (total vehicles, distance, cost, avg/vehicle)
+  - [x] Preview route results (table view with filtering by vehicle)
+  - [x] Download button untuk Excel file
+  - [x] Historical results integration
 
 ### 3.2 Historical Results Viewer
-- [ ] List previous routing results (dari `results/` folder)
-- [ ] Filter by date
-- [ ] Download previous results
+- [x] List previous routing results (dari `results/` folder)
+- [x] Display file metadata (filename, created date, size)
+- [x] Download previous results
 
 ---
 

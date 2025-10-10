@@ -46,48 +46,107 @@ class Order:
         if not (-180 <= lng <= 180):
             raise ValueError(f"Order {self.sale_order_id}: Invalid longitude {lng}")
 
-        # Validate delivery_time format
+        # Normalize and validate delivery_date format (accept both YYYY-MM-DD and ISO datetime)
+        self.delivery_date = self._normalize_date(self.delivery_date)
+
+        # Validate delivery_time format (supports HH:MM or HH:MM-HH:MM)
+        self._validate_time_format(self.delivery_time)
+
+    def _validate_time_format(self, time_str: str):
+        """
+        Validate time format. Accepts HH:MM or HH:MM-HH:MM formats.
+
+        Args:
+            time_str: Time string to validate
+
+        Raises:
+            ValueError: If time format is invalid
+        """
         try:
-            time.fromisoformat(self.delivery_time)
+            # Handle time range format (e.g., "04:00-05:00")
+            if '-' in time_str:
+                parts = time_str.split('-')
+                if len(parts) != 2:
+                    raise ValueError("Time range must have exactly one '-'")
+                time.fromisoformat(parts[0])  # Validate start time
+                time.fromisoformat(parts[1])  # Validate end time
+            # Handle single time format (e.g., "04:00")
+            else:
+                time.fromisoformat(time_str)
         except ValueError:
             raise ValueError(
-                f"Order {self.sale_order_id}: Invalid time format '{self.delivery_time}'. "
-                "Expected HH:MM"
+                f"Order {self.sale_order_id}: Invalid time format '{time_str}'. "
+                "Expected HH:MM or HH:MM-HH:MM"
             )
 
-        # Validate delivery_date format
+    def _normalize_date(self, date_str: str) -> str:
+        """
+        Normalize date string to YYYY-MM-DD format.
+        Accepts both YYYY-MM-DD and ISO datetime formats (YYYY-MM-DDTHH:MM:SS).
+
+        Args:
+            date_str: Date string in various formats
+
+        Returns:
+            Normalized date string in YYYY-MM-DD format
+
+        Raises:
+            ValueError: If date format is invalid
+        """
         try:
-            datetime.strptime(self.delivery_date, "%Y-%m-%d")
+            # Try ISO datetime format first (YYYY-MM-DDTHH:MM:SS)
+            if 'T' in date_str:
+                dt = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+                return dt.strftime("%Y-%m-%d")
+            # Try simple date format (YYYY-MM-DD)
+            else:
+                dt = datetime.strptime(date_str, "%Y-%m-%d")
+                return date_str
         except ValueError:
             raise ValueError(
-                f"Order {self.sale_order_id}: Invalid date format '{self.delivery_date}'. "
-                "Expected YYYY-MM-DD"
+                f"Order {self.sale_order_id}: Invalid date format '{date_str}'. "
+                "Expected YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS"
             )
 
     @property
     def time_window_start(self) -> int:
         """
         Get time window start in minutes from midnight.
-        For delivery at HH:MM, the earliest arrival is the delivery time.
+        Supports both single time (HH:MM) and time range (HH:MM-HH:MM) formats.
 
         Returns:
-            Minutes from midnight
+            Minutes from midnight (earliest acceptable arrival)
         """
-        t = time.fromisoformat(self.delivery_time)
-        return t.hour * 60 + t.minute
+        # Handle time range format (e.g., "04:00-05:00")
+        if '-' in self.delivery_time:
+            start_time_str = self.delivery_time.split('-')[0]
+            t = time.fromisoformat(start_time_str)
+            return t.hour * 60 + t.minute
+        # Handle single time format (e.g., "04:00")
+        else:
+            t = time.fromisoformat(self.delivery_time)
+            return t.hour * 60 + t.minute
 
     @property
     def time_window_end(self) -> int:
         """
         Get time window end in minutes from midnight.
-        For delivery at HH:MM, the latest arrival is the delivery time.
-        This is a HARD constraint - must arrive exactly at delivery_time.
+        Supports both single time (HH:MM) and time range (HH:MM-HH:MM) formats.
+        For single time, end = start (exact delivery time).
+        For time range, end is the second time.
 
         Returns:
-            Minutes from midnight
+            Minutes from midnight (latest acceptable arrival)
         """
-        t = time.fromisoformat(self.delivery_time)
-        return t.hour * 60 + t.minute
+        # Handle time range format (e.g., "04:00-05:00")
+        if '-' in self.delivery_time:
+            end_time_str = self.delivery_time.split('-')[1]
+            t = time.fromisoformat(end_time_str)
+            return t.hour * 60 + t.minute
+        # Handle single time format (e.g., "04:00")
+        else:
+            t = time.fromisoformat(self.delivery_time)
+            return t.hour * 60 + t.minute
 
     @property
     def departure_time(self) -> int:

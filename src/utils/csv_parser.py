@@ -24,7 +24,8 @@ class CSVParser:
     - partner_id: Customer partner ID
     - display_name: Customer display name
     - alamat: Full address
-    - coordinates: Coordinates in "lat,lng" format
+    - coordinates: Coordinates in "lat,lng" format OR
+    - partner_latitude + partner_longitude: Separate coordinate columns
     - is_priority: Priority flag (optional, 0/1 or True/False)
     """
 
@@ -36,8 +37,10 @@ class CSVParser:
         "partner_id",
         "display_name",
         "alamat",
-        "coordinates",
     ]
+
+    COORDINATE_COLUMNS_COMBINED = ["coordinates"]
+    COORDINATE_COLUMNS_SEPARATE = ["partner_latitude", "partner_longitude"]
 
     def __init__(self, csv_path: str):
         """
@@ -103,6 +106,16 @@ class CSVParser:
                 f"Missing required columns: {', '.join(missing_columns)}"
             )
 
+        # Check coordinate columns - must have either combined OR separate format
+        has_combined = all(col in self.df.columns for col in self.COORDINATE_COLUMNS_COMBINED)
+        has_separate = all(col in self.df.columns for col in self.COORDINATE_COLUMNS_SEPARATE)
+
+        if not has_combined and not has_separate:
+            raise CSVParserError(
+                f"Missing coordinate columns. Must have either '{self.COORDINATE_COLUMNS_COMBINED[0]}' "
+                f"OR both '{self.COORDINATE_COLUMNS_SEPARATE[0]}' and '{self.COORDINATE_COLUMNS_SEPARATE[1]}'"
+            )
+
     def _parse_row(self, row: pd.Series, idx: int) -> Order:
         """
         Parse a single row into an Order object.
@@ -122,8 +135,8 @@ class CSVParser:
             if pd.isna(row[col]) or str(row[col]).strip() == "":
                 raise ValueError(f"Missing required field: {col}")
 
-        # Parse coordinates
-        coordinates = self._parse_coordinates(row["coordinates"], idx)
+        # Parse coordinates - handle both formats
+        coordinates = self._parse_coordinates_from_row(row, idx)
 
         # Parse priority flag (optional)
         is_priority = False
@@ -144,6 +157,39 @@ class CSVParser:
         )
 
         return order
+
+    def _parse_coordinates_from_row(self, row: pd.Series, idx: int) -> Tuple[float, float]:
+        """
+        Parse coordinates from row - handles both combined and separate formats.
+
+        Args:
+            row: DataFrame row
+            idx: Row index (for error messages)
+
+        Returns:
+            Tuple of (latitude, longitude)
+
+        Raises:
+            ValueError: If coordinates format is invalid
+        """
+        # Check if separate columns exist and have values
+        if "partner_latitude" in row and "partner_longitude" in row:
+            if not pd.isna(row["partner_latitude"]) and not pd.isna(row["partner_longitude"]):
+                try:
+                    lat = float(row["partner_latitude"])
+                    lng = float(row["partner_longitude"])
+                    return (lat, lng)
+                except (ValueError, TypeError) as e:
+                    raise ValueError(
+                        f"Invalid latitude/longitude values: lat={row['partner_latitude']}, lng={row['partner_longitude']}"
+                    )
+
+        # Fall back to combined format
+        if "coordinates" in row and not pd.isna(row["coordinates"]):
+            return self._parse_coordinates(row["coordinates"], idx)
+
+        # If we get here, no valid coordinates found
+        raise ValueError("Missing coordinate data in row")
 
     def _parse_coordinates(self, coord_str: str, idx: int) -> Tuple[float, float]:
         """
