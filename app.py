@@ -183,7 +183,7 @@ def render_upload_section():
         use_default = st.checkbox("Gunakan konfigurasi vehicle default", value=True)
 
         if use_default:
-            default_yaml_path = "example/example_input_vehicle.yaml"
+            default_yaml_path = "conf.yaml"
             if os.path.exists(default_yaml_path):
                 try:
                     parser = YAMLParser(default_yaml_path)
@@ -457,7 +457,7 @@ def render_results_section():
         st.metric("Total Distance", f"{solution.total_distance:.1f} km")
 
     with col4:
-        st.metric("Total Cost", f"Rp {solution.total_cost:,.0f}")
+        st.metric("Total Cost (Estimation)", f"Rp {solution.total_cost:,.0f}")
 
     # Additional metrics
     col5, col6, col7, col8 = st.columns(4)
@@ -488,12 +488,12 @@ def render_results_section():
             if stop.order is not None:  # Skip depot
                 route_data.append({
                     "Vehicle": route.vehicle.name,
-                    "Sequence": stop.sequence,
-                    "Customer": stop.location.name,
-                    "Address": stop.location.address or "-",
+                    "Sequence": stop.sequence + 1,
+                    "Customer": stop.order.display_name if stop.order else "-",
+                    "Address": stop.order.alamat if stop.order else "-",
                     "Delivery Time": stop.order.delivery_time if stop.order else "-",
-                    "Arrival": stop.arrival_time.strftime("%H:%M") if stop.arrival_time else "-",
-                    "Departure": stop.departure_time.strftime("%H:%M") if stop.departure_time else "-",
+                    "Arrival": stop.arrival_time_str,
+                    "Departure": stop.departure_time_str,
                     "Weight (kg)": f"{stop.order.load_weight_in_kg:.1f}" if stop.order else "-",
                     "Cumulative Weight (kg)": f"{stop.cumulative_weight:.1f}",
                     "Distance (km)": f"{stop.distance_from_prev:.2f}",

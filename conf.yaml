@@ -1,0 +1,17 @@
+# Vehicle Fleet Configuration for Segarloka
+
+vehicles:
+  - name: "Sepeda Motor"
+    capacity: 80  # kg
+    cost_per_km: 1000  # Rupiah per kilometer
+
+  - name: "Mobil"
+    capacity: 150  # kg
+    cost_per_km: 3500  # Rupiah per kilometer
+
+  - name: "Minitruck"
+    capacity: 250  # kg
+    cost_per_km: 4000  # Rupiah per kilometer
+
+# Unlimited fleet means we can use as many vehicles as needed
+unlimited: true
