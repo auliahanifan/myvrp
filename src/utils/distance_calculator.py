@@ -99,7 +99,7 @@ class DistanceCalculator:
         # Radar API supports multiple origins and destinations in a single request
         # Format: origins=lat1,lng1|lat2,lng2&destinations=lat3,lng3|lat4,lng4
         # Using batches to avoid hitting URL length limits (typically ~2000 chars)
-        batch_size = 200  # Conservative batch size for URL length
+        batch_size = 25  # Conservative batch size for URL length
 
         try:
             for i in range(0, n, batch_size):
