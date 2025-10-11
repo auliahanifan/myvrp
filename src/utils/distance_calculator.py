@@ -10,6 +10,7 @@ import time
 from datetime import datetime, timedelta
 from typing import List, Tuple, Dict, Optional
 import numpy as np
+from math import radians, cos, sin, asin, sqrt
 from ..models.location import Location
 
 
@@ -29,7 +30,9 @@ class DistanceCalculator:
         api_key: str,
         cache_dir: str = ".cache",
         cache_ttl_hours: int = 24,
-        enable_cache: bool = True
+        enable_cache: bool = True,
+        max_radar_distance_km: float = 150.0,
+        fallback_speed_kmh: float = 40.0
     ):
         """
         Initialize distance calculator.
@@ -39,6 +42,8 @@ class DistanceCalculator:
             cache_dir: Directory for caching API responses
             cache_ttl_hours: Cache time-to-live in hours (default: 24)
             enable_cache: Enable/disable caching (default: True)
+            max_radar_distance_km: Max distance for Radar API; use Haversine beyond this (default: 150km)
+            fallback_speed_kmh: Assumed speed for duration estimation with Haversine (default: 40 km/h)
         """
         if not api_key:
             raise DistanceCalculatorError("Radar API key is required")
@@ -48,21 +53,74 @@ class DistanceCalculator:
         self.base_url = "https://api.radar.io/v1"
         self.cache_ttl_hours = cache_ttl_hours
         self.enable_cache = enable_cache
+        self.max_radar_distance_km = max_radar_distance_km
+        self.fallback_speed_kmh = fallback_speed_kmh
 
         # Cache statistics
         self.cache_hits = 0
         self.cache_misses = 0
         self.api_calls = 0
+        self.haversine_fallbacks = 0
 
         # Create cache directory if it doesn't exist
         if enable_cache:
             os.makedirs(cache_dir, exist_ok=True)
+
+    def _haversine_distance(self, coord1: Tuple[float, float], coord2: Tuple[float, float]) -> float:
+        """
+        Calculate the great circle distance between two points on Earth using Haversine formula.
+
+        Args:
+            coord1: (latitude, longitude) tuple for first point
+            coord2: (latitude, longitude) tuple for second point
+
+        Returns:
+            Distance in kilometers
+        """
+        lat1, lon1 = radians(coord1[0]), radians(coord1[1])
+        lat2, lon2 = radians(coord2[0]), radians(coord2[1])
+
+        dlat = lat2 - lat1
+        dlon = lon2 - lon1
+
+        a = sin(dlat / 2) ** 2 + cos(lat1) * cos(lat2) * sin(dlon / 2) ** 2
+        c = 2 * asin(sqrt(a))
+
+        # Radius of Earth in kilometers
+        r = 6371
+
+        return c * r
+
+    def _should_use_haversine_batch(self, origins: List[Tuple[float, float]],
+                                     destinations: List[Tuple[float, float]]) -> bool:
+        """
+        Determine if a batch should use Haversine instead of Radar API.
+        Checks if any pair of coordinates exceeds the max distance threshold.
+
+        Args:
+            origins: List of origin coordinates
+            destinations: List of destination coordinates
+
+        Returns:
+            True if should use Haversine fallback, False otherwise
+        """
+        # Check max distance within origins + destinations combined
+        all_coords = origins + destinations
+
+        for i, coord1 in enumerate(all_coords):
+            for coord2 in all_coords[i+1:]:
+                dist = self._haversine_distance(coord1, coord2)
+                if dist > self.max_radar_distance_km:
+                    return True
+
+        return False
 
     def calculate_matrix(
         self, locations: List[Location], force_refresh: bool = False
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
         Calculate distance and duration matrices for all locations.
+        Uses Radar API for nearby locations and Haversine formula for distant pairs.
 
         Args:
             locations: List of Location objects (depot + customers)
@@ -98,8 +156,9 @@ class DistanceCalculator:
 
         # Radar API supports multiple origins and destinations in a single request
         # Format: origins=lat1,lng1|lat2,lng2&destinations=lat3,lng3|lat4,lng4
-        # Using batches to avoid hitting URL length limits (typically ~2000 chars)
-        batch_size = 25  # Conservative batch size for URL length
+        # Batches are checked for geographic distance before API calls
+        # Main constraint is URL length limit (~2000 chars)
+        batch_size = 25  # Optimized for URL length; distance checked per batch
 
         try:
             for i in range(0, n, batch_size):
@@ -108,31 +167,85 @@ class DistanceCalculator:
                 for j in range(0, n, batch_size):
                     destinations_batch = coordinates[j : min(j + batch_size, n)]
 
-                    # Call Radar Distance Matrix API
-                    self.api_calls += 1
-                    result = self._call_radar_matrix_api(
-                        origins_batch, destinations_batch
-                    )
-
-                    # Parse results
-                    self._parse_api_response(
-                        result,
-                        distance_matrix,
-                        duration_matrix,
-                        i,
-                        j,
-                    )
+                    # Check if batch should use Haversine fallback
+                    if self._should_use_haversine_batch(origins_batch, destinations_batch):
+                        # Use Haversine for this batch
+                        self.haversine_fallbacks += 1
+                        self._fill_matrix_haversine(
+                            origins_batch, destinations_batch,
+                            distance_matrix, duration_matrix,
+                            i, j
+                        )
+                    else:
+                        # Call Radar Distance Matrix API
+                        self.api_calls += 1
+                        try:
+                            result = self._call_radar_matrix_api(
+                                origins_batch, destinations_batch
+                            )
+                            # Parse results
+                            self._parse_api_response(
+                                result,
+                                distance_matrix,
+                                duration_matrix,
+                                i,
+                                j,
+                            )
+                        except DistanceCalculatorError as e:
+                            # If Radar API fails due to distance, fall back to Haversine
+                            if "too far apart" in str(e).lower():
+                                self.haversine_fallbacks += 1
+                                self._fill_matrix_haversine(
+                                    origins_batch, destinations_batch,
+                                    distance_matrix, duration_matrix,
+                                    i, j
+                                )
+                            else:
+                                raise
 
         except requests.exceptions.RequestException as e:
             raise DistanceCalculatorError(f"Radar API request error: {str(e)}")
+        except DistanceCalculatorError:
+            raise
         except Exception as e:
-            raise DistanceCalculatorError(f"Error calling Radar API: {str(e)}")
+            raise DistanceCalculatorError(f"Error calculating distance matrix: {str(e)}")
 
         # Cache the result with metadata
         if self.enable_cache:
             self._save_to_cache(cache_key, (distance_matrix, duration_matrix))
 
         return distance_matrix, duration_matrix
+
+    def _fill_matrix_haversine(
+        self,
+        origins: List[Tuple[float, float]],
+        destinations: List[Tuple[float, float]],
+        distance_matrix: np.ndarray,
+        duration_matrix: np.ndarray,
+        row_offset: int,
+        col_offset: int
+    ):
+        """
+        Fill matrix using Haversine distance calculation.
+
+        Args:
+            origins: List of origin coordinates
+            destinations: List of destination coordinates
+            distance_matrix: Distance matrix to fill
+            duration_matrix: Duration matrix to fill
+            row_offset: Row offset for batch processing
+            col_offset: Column offset for batch processing
+        """
+        for i, origin in enumerate(origins):
+            for j, destination in enumerate(destinations):
+                # Calculate Haversine distance
+                distance_km = self._haversine_distance(origin, destination)
+
+                # Estimate duration based on assumed average speed
+                duration_min = (distance_km / self.fallback_speed_kmh) * 60
+
+                distance_matrix[row_offset + i, col_offset + j] = distance_km
+                duration_matrix[row_offset + i, col_offset + j] = duration_min
 
     def _call_radar_matrix_api(
         self, origins: List[Tuple[float, float]], destinations: List[Tuple[float, float]]
@@ -374,6 +487,7 @@ class DistanceCalculator:
             "total_requests": total_requests,
             "hit_rate_percent": round(hit_rate, 2),
             "api_calls": self.api_calls,
+            "haversine_fallbacks": self.haversine_fallbacks,
             "cached_files": self.get_cache_size(),
             "cache_enabled": self.enable_cache,
             "cache_ttl_hours": self.cache_ttl_hours,

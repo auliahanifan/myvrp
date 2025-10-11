@@ -289,3 +289,153 @@ class TestDistanceCalculator:
         # Check headers
         headers = call_args[1]["headers"]
         assert headers["Authorization"] == mock_api_key
+
+    def test_haversine_distance(self, mock_api_key):
+        """Test Haversine distance calculation."""
+        calc = DistanceCalculator(mock_api_key)
+
+        # Jakarta to Bandung (approximately 150 km)
+        jakarta = (-6.2088, 106.8456)
+        bandung = (-6.9175, 107.6191)
+
+        distance = calc._haversine_distance(jakarta, bandung)
+
+        # Should be approximately 150 km (allowing 10 km margin)
+        assert 140 <= distance <= 160
+
+    def test_haversine_distance_same_location(self, mock_api_key):
+        """Test Haversine distance for same location."""
+        calc = DistanceCalculator(mock_api_key)
+
+        location = (-6.2088, 106.8456)
+        distance = calc._haversine_distance(location, location)
+
+        # Distance should be 0
+        assert distance == 0
+
+    def test_haversine_distance_short_distance(self, mock_api_key):
+        """Test Haversine distance for short distances."""
+        calc = DistanceCalculator(mock_api_key)
+
+        # Two nearby points in Jakarta (about 1.5 km apart)
+        point1 = (-6.2088, 106.8456)
+        point2 = (-6.2100, 106.8600)
+
+        distance = calc._haversine_distance(point1, point2)
+
+        # Should be approximately 1-2 km
+        assert 1 <= distance <= 2
+
+    def test_should_use_haversine_batch_nearby(self, mock_api_key):
+        """Test that nearby locations use Radar API."""
+        calc = DistanceCalculator(mock_api_key, max_radar_distance_km=150.0)
+
+        # All nearby locations in Jakarta
+        origins = [(-6.2088, 106.8456), (-6.2100, 106.8500)]
+        destinations = [(-6.2200, 106.8600), (-6.2300, 106.8700)]
+
+        should_use_haversine = calc._should_use_haversine_batch(origins, destinations)
+
+        # Should use Radar API (not Haversine)
+        assert should_use_haversine is False
+
+    def test_should_use_haversine_batch_distant(self, mock_api_key):
+        """Test that distant locations use Haversine."""
+        calc = DistanceCalculator(mock_api_key, max_radar_distance_km=150.0)
+
+        # Jakarta and Surabaya (approximately 700 km apart)
+        origins = [(-6.2088, 106.8456)]  # Jakarta
+        destinations = [(-7.2575, 112.7521)]  # Surabaya
+
+        should_use_haversine = calc._should_use_haversine_batch(origins, destinations)
+
+        # Should use Haversine (distance > 150 km)
+        assert should_use_haversine is True
+
+    def test_fill_matrix_haversine(self, mock_api_key):
+        """Test filling matrix with Haversine calculations."""
+        calc = DistanceCalculator(mock_api_key, fallback_speed_kmh=40.0)
+
+        origins = [(-6.2088, 106.8456), (-6.2100, 106.8500)]
+        destinations = [(-6.2200, 106.8600)]
+
+        distance_matrix = np.zeros((2, 1))
+        duration_matrix = np.zeros((2, 1))
+
+        calc._fill_matrix_haversine(origins, destinations, distance_matrix, duration_matrix, 0, 0)
+
+        # Check that matrices are filled
+        assert distance_matrix[0, 0] > 0
+        assert duration_matrix[0, 0] > 0
+
+        # Check duration calculation (distance / speed * 60)
+        expected_duration = (distance_matrix[0, 0] / 40.0) * 60
+        assert abs(duration_matrix[0, 0] - expected_duration) < 0.01
+
+    @patch('src.utils.distance_calculator.requests.get')
+    def test_haversine_fallback_on_api_error(self, mock_get, mock_api_key, sample_locations):
+        """Test that Haversine fallback works when API returns 'too far apart' error."""
+        # Setup mock to return "too far apart" error
+        mock_response = MagicMock()
+        mock_response.status_code = 400
+        mock_response.text = '{"meta":{"code":400,"message":"Coordinates specified are too far apart"}}'
+        mock_get.return_value = mock_response
+
+        calc = DistanceCalculator(mock_api_key, cache_dir="/tmp/test_cache", max_radar_distance_km=150.0)
+
+        # Should not raise error, should fall back to Haversine
+        dist_matrix, dur_matrix = calc.calculate_matrix(sample_locations)
+
+        # Check that matrices are filled
+        assert dist_matrix.shape == (3, 3)
+        assert dur_matrix.shape == (3, 3)
+        assert calc.haversine_fallbacks > 0
+
+    def test_cache_stats_with_haversine(self, mock_api_key):
+        """Test that cache stats include Haversine fallback count."""
+        calc = DistanceCalculator(mock_api_key)
+        calc.haversine_fallbacks = 5
+
+        stats = calc.get_cache_stats()
+
+        assert "haversine_fallbacks" in stats
+        assert stats["haversine_fallbacks"] == 5
+
+    @patch('src.utils.distance_calculator.requests.get')
+    def test_hybrid_approach_mixed_distances(self, mock_get, mock_api_key, mock_api_response_success):
+        """Test hybrid approach with mixed nearby and distant locations."""
+        import tempfile
+        import shutil
+
+        temp_cache = tempfile.mkdtemp()
+
+        try:
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = mock_api_response_success
+            mock_get.return_value = mock_response
+
+            calc = DistanceCalculator(
+                mock_api_key,
+                cache_dir=temp_cache,
+                max_radar_distance_km=50.0  # Low threshold to force some Haversine fallbacks
+            )
+
+            # Mix of nearby and distant locations
+            locations = [
+                Depot("Depot", (-6.2088, 106.8456)),  # Jakarta
+                Location("Nearby 1", (-6.2100, 106.8500)),  # Near Jakarta
+                Location("Distant", (-7.2575, 112.7521)),  # Surabaya (far)
+            ]
+
+            dist_matrix, dur_matrix = calc.calculate_matrix(locations)
+
+            # Should have used both Radar API and Haversine
+            assert dist_matrix.shape == (3, 3)
+            assert dur_matrix.shape == (3, 3)
+
+            # At least one batch should have used Haversine
+            assert calc.haversine_fallbacks >= 0
+
+        finally:
+            shutil.rmtree(temp_cache)
