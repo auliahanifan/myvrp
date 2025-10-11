@@ -353,9 +353,10 @@ class VRPSolver:
         # Check for unassigned orders
         unassigned_orders = []
         for node in range(1, len(self.locations)):  # Skip depot (node 0)
-            if self.routing.IsStart(node) or self.routing.IsEnd(node):
+            index = self.manager.NodeToIndex(node)
+            if self.routing.IsStart(index) or self.routing.IsEnd(index):
                 continue
-            if self.solution.Value(self.routing.NextVar(node)) == node:
+            if self.solution.Value(self.routing.NextVar(index)) == index:
                 unassigned_orders.append(self.orders[node - 1])
 
         # Create solution
