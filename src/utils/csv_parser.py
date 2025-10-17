@@ -2,6 +2,7 @@
 CSV parser for order data.
 Parses order CSV files and creates Order objects with validation.
 """
+
 import pandas as pd
 from typing import List, Tuple
 from ..models.order import Order
@@ -9,6 +10,7 @@ from ..models.order import Order
 
 class CSVParserError(Exception):
     """Custom exception for CSV parsing errors."""
+
     pass
 
 
@@ -35,8 +37,6 @@ class CSVParser:
         "delivery_time",
         "load_weight_in_kg",
         "partner_id",
-        "display_name",
-        "alamat",
     ]
 
     COORDINATE_COLUMNS_COMBINED = ["coordinates"]
@@ -79,9 +79,15 @@ class CSVParser:
         for idx, row in self.df.iterrows():
             try:
                 order = self._parse_row(row, idx)
-                orders.append(order)
-            except Exception as e:
+                if order:
+                    orders.append(order)
+            except ValueError as e:
                 self.errors.append(f"Row {idx + 2}: {str(e)}")
+
+        # Check for duplicate sale_order_ids
+        order_ids = [order.sale_order_id for order in orders]
+        if len(order_ids) != len(set(order_ids)):
+            self.errors.append("Warning: Duplicate sale_order_ids found in CSV")
 
         # Check for errors
         if self.errors:
@@ -107,8 +113,12 @@ class CSVParser:
             )
 
         # Check coordinate columns - must have either combined OR separate format
-        has_combined = all(col in self.df.columns for col in self.COORDINATE_COLUMNS_COMBINED)
-        has_separate = all(col in self.df.columns for col in self.COORDINATE_COLUMNS_SEPARATE)
+        has_combined = all(
+            col in self.df.columns for col in self.COORDINATE_COLUMNS_COMBINED
+        )
+        has_separate = all(
+            col in self.df.columns for col in self.COORDINATE_COLUMNS_SEPARATE
+        )
 
         if not has_combined and not has_separate:
             raise CSVParserError(
@@ -135,8 +145,12 @@ class CSVParser:
             if pd.isna(row[col]) or str(row[col]).strip() == "":
                 raise ValueError(f"Missing required field: {col}")
 
-        # Parse coordinates - handle both formats
-        coordinates = self._parse_coordinates_from_row(row, idx)
+        # Parse coordinates
+        try:
+            coordinates = self._parse_coordinates_from_row(row, idx)
+        except ValueError as e:
+            self.errors.append(f"Row {idx + 2}: {str(e)}")
+            coordinates = None
 
         # Parse priority flag (optional)
         is_priority = False
@@ -158,7 +172,9 @@ class CSVParser:
 
         return order
 
-    def _parse_coordinates_from_row(self, row: pd.Series, idx: int) -> Tuple[float, float]:
+    def _parse_coordinates_from_row(
+        self, row: pd.Series, idx: int
+    ) -> Tuple[float, float]:
         """
         Parse coordinates from row - handles both combined and separate formats.
 
@@ -174,7 +190,9 @@ class CSVParser:
         """
         # Check if separate columns exist and have values
         if "partner_latitude" in row and "partner_longitude" in row:
-            if not pd.isna(row["partner_latitude"]) and not pd.isna(row["partner_longitude"]):
+            if not pd.isna(row["partner_latitude"]) and not pd.isna(
+                row["partner_longitude"]
+            ):
                 try:
                     lat = float(row["partner_latitude"])
                     lng = float(row["partner_longitude"])
