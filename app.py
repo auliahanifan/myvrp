@@ -319,20 +319,6 @@ def render_configuration_section():
             unsafe_allow_html=True
         )
 
-        # Radar API status
-        api_key = os.getenv("RADAR_API_KEY")
-        if api_key and api_key != "your_api_key_here":
-            st.markdown(
-                '<div class="success-box">✅ Radar API Key configured</div>',
-                unsafe_allow_html=True
-            )
-        else:
-            st.markdown(
-                '<div class="error-box">❌ Radar API Key not configured!<br>'
-                'Set RADAR_API_KEY in .env file</div>',
-                unsafe_allow_html=True
-            )
-
     return optimization_strategy, time_limit
 
 
@@ -373,12 +359,8 @@ def render_processing_section(optimization_strategy, time_limit):
             ]
 
             # Step 2: Calculate distance matrix with cache
-            status_text.text("🗺️ Menghitung distance matrix via Radar API...")
+            status_text.text("🗺️ Menghitung distance matrix via OSRM API...")
             progress_bar.progress(20)
-
-            api_key = os.getenv("RADAR_API_KEY")
-            if not api_key or api_key == "your_api_key_here":
-                raise ValueError("Radar API key tidak dikonfigurasi. Set RADAR_API_KEY di .env file")
 
             # Get cache config from YAML
             parser = YAMLParser("conf.yaml")
@@ -386,13 +368,12 @@ def render_processing_section(optimization_strategy, time_limit):
             cache_config = parser.get_cache_config()
 
             calculator = DistanceCalculator(
-                api_key=api_key,
                 cache_dir=cache_config.get("directory", ".cache"),
                 cache_ttl_hours=cache_config.get("ttl_hours", 24),
                 enable_cache=cache_config.get("enabled", True)
             )
 
-            with st.spinner("Fetching distances from Radar (with cache)..."):
+            with st.spinner("Fetching distances from OSRM (with cache)..."):
                 distance_matrix, duration_matrix = calculator.calculate_matrix(locations)
 
             # Show cache statistics
@@ -559,10 +540,8 @@ def render_results_section():
 
     try:
         depot = st.session_state.depot
-        radar_api_key = os.getenv("RADAR_API_KEY")
         visualizer = MapVisualizer(
             depot=depot,
-            radar_api_key=radar_api_key,
             enable_road_routing=True  # Use actual road paths
         )
 
@@ -590,7 +569,7 @@ def render_results_section():
                 )
             else:
                 route_map = visualizer.create_map(solution, zoom_start=12)
-            st.warning("⚠️ Using straight-line paths (set RADAR_API_KEY for road routing)")
+            st.warning("⚠️ Using straight-line paths (OSRM URL not configured for road routing)")
 
         # Display map
         st_folium(route_map, width=1400, height=600)
@@ -785,7 +764,7 @@ def render_sidebar():
         - ✅ Vehicle capacity constraints
         - ✅ Unlimited fleet auto-scaling
         - ✅ 3 optimization strategies
-        - ✅ Radar Distance Matrix API
+        - ✅ OSRM Distance Matrix API
         - ✅ Professional Excel output
         - ✅ Interactive map visualization
         - ✅ Historical results tracking
@@ -800,12 +779,12 @@ def render_sidebar():
 
         st.header("🔧 System Status")
 
-        # Check API key
-        api_key = os.getenv("RADAR_API_KEY")
-        if api_key and api_key != "your_api_key_here":
-            st.success("✅ Radar API")
+        # Check OSRM API
+        osrm_url = os.getenv("OSRM_URL", "http://osrm.segarloka.cc")
+        if osrm_url:
+            st.success(f"✅ OSRM API at {osrm_url}")
         else:
-            st.error("❌ Radar API")
+            st.error("❌ OSRM API not configured")
 
         # Check depot config
         depot_lat = os.getenv("DEPOT_LATITUDE")
@@ -838,7 +817,7 @@ def render_sidebar():
         **🔗 Powered by:**
         - Google OR-Tools
         - Streamlit
-        - Radar API
+        - OSRM
         """)
 
 

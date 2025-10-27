@@ -1,5 +1,5 @@
 """
-Distance calculator using Radar Distance Matrix API.
+Distance calculator using OSRM API.
 Calculates distance and duration matrices with caching support.
 """
 import requests
@@ -21,39 +21,30 @@ class DistanceCalculatorError(Exception):
 
 class DistanceCalculator:
     """
-    Calculator for distance and duration matrices using Radar API.
-    Implements caching to minimize API calls and costs.
+    Calculator for distance and duration matrices using OSRM API.
+    Implements caching to minimize API calls.
     """
 
     def __init__(
         self,
-        api_key: str,
         cache_dir: str = ".cache",
         cache_ttl_hours: int = 24,
         enable_cache: bool = True,
-        max_radar_distance_km: float = 150.0,
         fallback_speed_kmh: float = 40.0
     ):
         """
         Initialize distance calculator.
 
         Args:
-            api_key: Radar API key
             cache_dir: Directory for caching API responses
             cache_ttl_hours: Cache time-to-live in hours (default: 24)
             enable_cache: Enable/disable caching (default: True)
-            max_radar_distance_km: Max distance for Radar API; use Haversine beyond this (default: 150km)
             fallback_speed_kmh: Assumed speed for duration estimation with Haversine (default: 40 km/h)
         """
-        if not api_key:
-            raise DistanceCalculatorError("Radar API key is required")
-
-        self.api_key = api_key
+        self.osrm_url = "http://osrm.segarloka.cc"
         self.cache_dir = cache_dir
-        self.base_url = "https://api.radar.io/v1"
         self.cache_ttl_hours = cache_ttl_hours
         self.enable_cache = enable_cache
-        self.max_radar_distance_km = max_radar_distance_km
         self.fallback_speed_kmh = fallback_speed_kmh
 
         # Cache statistics
@@ -91,36 +82,12 @@ class DistanceCalculator:
 
         return c * r
 
-    def _should_use_haversine_batch(self, origins: List[Tuple[float, float]],
-                                     destinations: List[Tuple[float, float]]) -> bool:
-        """
-        Determine if a batch should use Haversine instead of Radar API.
-        Checks if any pair of coordinates exceeds the max distance threshold.
-
-        Args:
-            origins: List of origin coordinates
-            destinations: List of destination coordinates
-
-        Returns:
-            True if should use Haversine fallback, False otherwise
-        """
-        # Check max distance within origins + destinations combined
-        all_coords = origins + destinations
-
-        for i, coord1 in enumerate(all_coords):
-            for coord2 in all_coords[i+1:]:
-                dist = self._haversine_distance(coord1, coord2)
-                if dist > self.max_radar_distance_km:
-                    return True
-
-        return False
-
     def calculate_matrix(
         self, locations: List[Location], force_refresh: bool = False
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
         Calculate distance and duration matrices for all locations.
-        Uses Radar API for nearby locations and Haversine formula for distant pairs.
+        Uses OSRM API and falls back to Haversine formula for very distant pairs or API errors.
 
         Args:
             locations: List of Location objects (depot + customers)
@@ -154,61 +121,17 @@ class DistanceCalculator:
         distance_matrix = np.zeros((n, n))
         duration_matrix = np.zeros((n, n))
 
-        # Radar API supports multiple origins and destinations in a single request
-        # Format: origins=lat1,lng1|lat2,lng2&destinations=lat3,lng3|lat4,lng4
-        # Batches are checked for geographic distance before API calls
-        # Main constraint is URL length limit (~2000 chars)
-        batch_size = 25  # Optimized for URL length; distance checked per batch
-
         try:
-            for i in range(0, n, batch_size):
-                origins_batch = coordinates[i : min(i + batch_size, n)]
-
-                for j in range(0, n, batch_size):
-                    destinations_batch = coordinates[j : min(j + batch_size, n)]
-
-                    # Check if batch should use Haversine fallback
-                    if self._should_use_haversine_batch(origins_batch, destinations_batch):
-                        # Use Haversine for this batch
-                        self.haversine_fallbacks += 1
-                        self._fill_matrix_haversine(
-                            origins_batch, destinations_batch,
-                            distance_matrix, duration_matrix,
-                            i, j
-                        )
-                    else:
-                        # Call Radar Distance Matrix API
-                        self.api_calls += 1
-                        try:
-                            result = self._call_radar_matrix_api(
-                                origins_batch, destinations_batch
-                            )
-                            # Parse results
-                            self._parse_api_response(
-                                result,
-                                distance_matrix,
-                                duration_matrix,
-                                i,
-                                j,
-                            )
-                        except DistanceCalculatorError as e:
-                            # If Radar API fails due to distance, fall back to Haversine
-                            if "too far apart" in str(e).lower():
-                                self.haversine_fallbacks += 1
-                                self._fill_matrix_haversine(
-                                    origins_batch, destinations_batch,
-                                    distance_matrix, duration_matrix,
-                                    i, j
-                                )
-                            else:
-                                raise
-
-        except requests.exceptions.RequestException as e:
-            raise DistanceCalculatorError(f"Radar API request error: {str(e)}")
-        except DistanceCalculatorError:
-            raise
-        except Exception as e:
-            raise DistanceCalculatorError(f"Error calculating distance matrix: {str(e)}")
+            self.api_calls += 1
+            result = self._call_osrm_matrix_api(coordinates)
+            self._parse_osrm_response(
+                result,
+                distance_matrix,
+                duration_matrix,
+            )
+        except (DistanceCalculatorError, requests.exceptions.RequestException) as e:
+            self.haversine_fallbacks += 1
+            self._fill_matrix_haversine_full(coordinates, distance_matrix, duration_matrix)
 
         # Cache the result with metadata
         if self.enable_cache:
@@ -216,46 +139,27 @@ class DistanceCalculator:
 
         return distance_matrix, duration_matrix
 
-    def _fill_matrix_haversine(
-        self,
-        origins: List[Tuple[float, float]],
-        destinations: List[Tuple[float, float]],
-        distance_matrix: np.ndarray,
-        duration_matrix: np.ndarray,
-        row_offset: int,
-        col_offset: int
+    def _fill_matrix_haversine_full(
+        self, 
+        coordinates: List[Tuple[float, float]], 
+        distance_matrix: np.ndarray, 
+        duration_matrix: np.ndarray
     ):
-        """
-        Fill matrix using Haversine distance calculation.
-
-        Args:
-            origins: List of origin coordinates
-            destinations: List of destination coordinates
-            distance_matrix: Distance matrix to fill
-            duration_matrix: Duration matrix to fill
-            row_offset: Row offset for batch processing
-            col_offset: Column offset for batch processing
-        """
-        for i, origin in enumerate(origins):
-            for j, destination in enumerate(destinations):
-                # Calculate Haversine distance
-                distance_km = self._haversine_distance(origin, destination)
-
-                # Estimate duration based on assumed average speed
+        """Fill the entire matrix using Haversine distance calculation."""
+        n = len(coordinates)
+        for i in range(n):
+            for j in range(n):
+                distance_km = self._haversine_distance(coordinates[i], coordinates[j])
                 duration_min = (distance_km / self.fallback_speed_kmh) * 60
+                distance_matrix[i, j] = distance_km
+                duration_matrix[i, j] = duration_min
 
-                distance_matrix[row_offset + i, col_offset + j] = distance_km
-                duration_matrix[row_offset + i, col_offset + j] = duration_min
-
-    def _call_radar_matrix_api(
-        self, origins: List[Tuple[float, float]], destinations: List[Tuple[float, float]]
-    ) -> dict:
+    def _call_osrm_matrix_api(self, coordinates: List[Tuple[float, float]]) -> dict:
         """
-        Call Radar Distance Matrix API.
+        Call OSRM Table Service API.
 
         Args:
-            origins: List of (latitude, longitude) tuples
-            destinations: List of (latitude, longitude) tuples
+            coordinates: List of (latitude, longitude) tuples
 
         Returns:
             API response as dictionary
@@ -263,87 +167,52 @@ class DistanceCalculator:
         Raises:
             DistanceCalculatorError: If API call fails
         """
-        # Format coordinates: "lat,lng|lat,lng|..."
-        origins_str = "|".join(f"{lat},{lng}" for lat, lng in origins)
-        destinations_str = "|".join(f"{lat},{lng}" for lat, lng in destinations)
-
-        url = f"{self.base_url}/route/matrix"
+        coords_str = ";".join(f"{lng},{lat}" for lat, lng in coordinates)
+        url = f"{self.osrm_url}/table/v1/car/{coords_str}"
         params = {
-            "origins": origins_str,
-            "destinations": destinations_str,
-            "mode": "car",
-            "units": "metric",
+            "annotations": "duration,distance"
         }
-        headers = {"Authorization": self.api_key}
 
-        response = requests.get(url, params=params, headers=headers, timeout=30)
+        response = requests.get(url, params=params, timeout=30)
 
         if response.status_code != 200:
             raise DistanceCalculatorError(
-                f"Radar API returned status {response.status_code}: {response.text}"
+                f"OSRM API returned status {response.status_code}: {response.text}"
             )
 
         data = response.json()
 
-        if data.get("meta", {}).get("code") != 200:
+        if data.get("code") != "Ok":
             raise DistanceCalculatorError(
-                f"Radar API error: {data.get('meta', {})}"
+                f"OSRM API error: {data.get('message', 'Unknown error')}"
             )
 
         return data
 
-    def _parse_api_response(
+    def _parse_osrm_response(
         self,
         response: dict,
         distance_matrix: np.ndarray,
         duration_matrix: np.ndarray,
-        row_offset: int,
-        col_offset: int,
     ):
         """
-        Parse Radar API response and fill matrices.
+        Parse OSRM API response and fill matrices.
 
         Args:
             response: API response dictionary
             distance_matrix: Distance matrix to fill
             duration_matrix: Duration matrix to fill
-            row_offset: Row offset for batch processing
-            col_offset: Column offset for batch processing
-
-        Raises:
-            DistanceCalculatorError: If response is invalid
         """
-        matrix = response.get("matrix", [])
+        distances = response.get("distances")
+        durations = response.get("durations")
 
-        if not matrix:
+        if not distances or not durations:
             raise DistanceCalculatorError("Empty matrix in API response")
 
-        # Radar returns matrix as a 2D array: matrix[origin_index][destination_index]
-        for origin_idx, row in enumerate(matrix):
-            for route in row:
-                dest_idx = route.get("destinationIndex")
-
-                if dest_idx is None:
-                    continue
-
-                # Check if route was found
-                distance_data = route.get("distance", {})
-                duration_data = route.get("duration", {})
-
-                if distance_data and duration_data:
-                    # Distance in kilometers (Radar returns meters)
-                    distance_m = distance_data.get("value", 0)
-                    distance_km = distance_m / 1000.0
-
-                    # Duration in minutes (Radar returns minutes as float)
-                    duration_min = duration_data.get("value", 0)
-
-                    distance_matrix[row_offset + origin_idx, col_offset + dest_idx] = distance_km
-                    duration_matrix[row_offset + origin_idx, col_offset + dest_idx] = duration_min
-                else:
-                    # If route not found, use large penalty value
-                    distance_matrix[row_offset + origin_idx, col_offset + dest_idx] = 999999
-                    duration_matrix[row_offset + origin_idx, col_offset + dest_idx] = 999999
+        for i in range(len(distances)):
+            for j in range(len(distances[i])):
+                distance_matrix[i, j] = distances[i][j] / 1000.0  # Convert meters to km
+                duration_matrix[i, j] = durations[i][j] / 60.0  # Convert seconds to minutes
 
     def _generate_cache_key(self, locations: List[Location]) -> str:
         """
@@ -355,12 +224,9 @@ class DistanceCalculator:
         Returns:
             Cache key string
         """
-        # Create a string representation of all coordinates
         coord_str = ";".join(
             f"{loc.latitude:.6f},{loc.longitude:.6f}" for loc in locations
         )
-
-        # Hash the string to create a cache key
         return hashlib.md5(coord_str.encode()).hexdigest()
 
     def _get_cache_path(self, cache_key: str) -> str:
@@ -393,27 +259,22 @@ class DistanceCalculator:
             return None
 
         try:
-            # Check if cache is expired
             file_age = time.time() - os.path.getmtime(cache_path)
             cache_ttl_seconds = self.cache_ttl_hours * 3600
 
             if file_age > cache_ttl_seconds:
-                # Cache expired, delete it
                 os.remove(cache_path)
                 return None
 
             with open(cache_path, "rb") as f:
                 cached_data = pickle.load(f)
 
-            # Support both old format (tuple) and new format (dict with metadata)
             if isinstance(cached_data, dict):
                 return (cached_data["distance_matrix"], cached_data["duration_matrix"])
             else:
-                # Old format, just return the tuple
                 return cached_data
 
         except Exception:
-            # If cache is corrupted, delete it and return None
             try:
                 os.remove(cache_path)
             except:
@@ -433,7 +294,6 @@ class DistanceCalculator:
         cache_path = self._get_cache_path(cache_key)
 
         try:
-            # Save with metadata
             cache_data = {
                 "distance_matrix": data[0],
                 "duration_matrix": data[1],
@@ -443,7 +303,6 @@ class DistanceCalculator:
             with open(cache_path, "wb") as f:
                 pickle.dump(cache_data, f)
         except Exception:
-            # If caching fails, just continue without caching
             pass
 
     def clear_cache(self):

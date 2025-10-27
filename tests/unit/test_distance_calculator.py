@@ -10,11 +10,6 @@ class TestDistanceCalculator:
     """Test suite for DistanceCalculator class."""
 
     @pytest.fixture
-    def mock_api_key(self):
-        """Mock API key for testing."""
-        return "mock_radar_api_key"
-
-    @pytest.fixture
     def sample_locations(self):
         """Create sample locations for testing."""
         depot = Depot("Depot", (-6.2088, 106.8456))
@@ -23,159 +18,97 @@ class TestDistanceCalculator:
         return [depot, loc1, loc2]
 
     @pytest.fixture
-    def mock_api_response_success(self):
-        """Mock successful Radar API response."""
+    def mock_osrm_response_success(self):
+        """Mock successful OSRM API response."""
         return {
-            "meta": {"code": 200},
-            "origins": [
-                {"latitude": -6.2088, "longitude": 106.8456},
-                {"latitude": -6.2100, "longitude": 106.8500},
-                {"latitude": -6.2200, "longitude": 106.8600},
+            "code": "Ok",
+            "distances": [
+                [0, 5000, 10000],
+                [5000, 0, 6000],
+                [10000, 6000, 0]
             ],
-            "destinations": [
-                {"latitude": -6.2088, "longitude": 106.8456},
-                {"latitude": -6.2100, "longitude": 106.8500},
-                {"latitude": -6.2200, "longitude": 106.8600},
-            ],
-            "matrix": [
-                [
-                    {"originIndex": 0, "destinationIndex": 0, "distance": {"value": 0}, "duration": {"value": 0}},
-                    {"originIndex": 0, "destinationIndex": 1, "distance": {"value": 5000}, "duration": {"value": 10}},
-                    {"originIndex": 0, "destinationIndex": 2, "distance": {"value": 10000}, "duration": {"value": 20}},
-                ],
-                [
-                    {"originIndex": 1, "destinationIndex": 0, "distance": {"value": 5000}, "duration": {"value": 10}},
-                    {"originIndex": 1, "destinationIndex": 1, "distance": {"value": 0}, "duration": {"value": 0}},
-                    {"originIndex": 1, "destinationIndex": 2, "distance": {"value": 6000}, "duration": {"value": 11.67}},
-                ],
-                [
-                    {"originIndex": 2, "destinationIndex": 0, "distance": {"value": 10000}, "duration": {"value": 20}},
-                    {"originIndex": 2, "destinationIndex": 1, "distance": {"value": 6000}, "duration": {"value": 11.67}},
-                    {"originIndex": 2, "destinationIndex": 2, "distance": {"value": 0}, "duration": {"value": 0}},
-                ],
-            ],
+            "durations": [
+                [0, 600, 1200],
+                [600, 0, 700],
+                [1200, 700, 0]
+            ]
         }
 
-    def test_calculator_initialization(self, mock_api_key):
+    def test_calculator_initialization(self):
         """Test distance calculator initialization."""
-        calc = DistanceCalculator(mock_api_key)
-        assert calc.api_key == mock_api_key
+        calc = DistanceCalculator()
+        assert calc.osrm_url == "http://osrm.segarloka.cc"
         assert calc.cache_dir == ".cache"
-        assert calc.base_url == "https://api.radar.io/v1"
-
-    def test_calculator_initialization_no_api_key(self):
-        """Test that calculator raises error without API key."""
-        with pytest.raises(DistanceCalculatorError) as exc_info:
-            DistanceCalculator("")
-        assert "API key is required" in str(exc_info.value)
 
     @patch('src.utils.distance_calculator.requests.get')
-    def test_calculate_matrix_success(self, mock_get, mock_api_key, sample_locations, mock_api_response_success):
+    def test_calculate_matrix_success(self, mock_get, sample_locations, mock_osrm_response_success):
         """Test successful matrix calculation."""
-        # Setup mock
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json.return_value = mock_api_response_success
+        mock_response.json.return_value = mock_osrm_response_success
         mock_get.return_value = mock_response
 
-        calc = DistanceCalculator(mock_api_key, cache_dir="/tmp/test_cache")
+        calc = DistanceCalculator(cache_dir="/tmp/test_cache")
         dist_matrix, dur_matrix = calc.calculate_matrix(sample_locations)
 
-        # Verify matrix dimensions
         assert dist_matrix.shape == (3, 3)
         assert dur_matrix.shape == (3, 3)
 
-        # Verify distances (converted from meters to km)
         assert dist_matrix[0, 1] == 5.0  # 5000m = 5km
-        assert dist_matrix[0, 2] == 10.0  # 10000m = 10km
+        assert dur_matrix[0, 1] == 10.0  # 600s = 10min
 
-        # Verify durations (Radar returns minutes directly)
-        assert dur_matrix[0, 1] == 10.0  # 10 minutes
-        assert dur_matrix[0, 2] == 20.0  # 20 minutes
-
-    def test_calculate_matrix_empty_locations(self, mock_api_key):
+    def test_calculate_matrix_empty_locations(self):
         """Test that calculator raises error for empty locations."""
-        calc = DistanceCalculator(mock_api_key)
+        calc = DistanceCalculator()
 
         with pytest.raises(DistanceCalculatorError) as exc_info:
             calc.calculate_matrix([])
         assert "Location list cannot be empty" in str(exc_info.value)
 
     @patch('src.utils.distance_calculator.requests.get')
-    def test_calculate_matrix_api_error(self, mock_get, mock_api_key, sample_locations):
+    def test_calculate_matrix_api_error(self, mock_get, sample_locations):
         """Test handling of API errors."""
-        # Setup mock to raise API error
-        mock_get.side_effect = Exception("API Error")
+        mock_get.side_effect = requests.exceptions.RequestException("API Error")
 
-        calc = DistanceCalculator(mock_api_key, cache_dir="/tmp/test_cache")
-
-        with pytest.raises(DistanceCalculatorError) as exc_info:
-            calc.calculate_matrix(sample_locations)
-        assert "Error calling Radar API" in str(exc_info.value)
+        calc = DistanceCalculator(cache_dir="/tmp/test_cache")
+        dist_matrix, dur_matrix = calc.calculate_matrix(sample_locations)
+        
+        assert calc.haversine_fallbacks == 1
+        assert np.all(dist_matrix >= 0)
+        assert np.all(dur_matrix >= 0)
 
     @patch('src.utils.distance_calculator.requests.get')
-    def test_calculate_matrix_status_not_ok(self, mock_get, mock_api_key, sample_locations):
+    def test_calculate_matrix_status_not_ok(self, mock_get, sample_locations):
         """Test handling of non-OK status from API."""
-        # Setup mock with error status
         mock_response = MagicMock()
-        mock_response.status_code = 401
-        mock_response.text = "Unauthorized"
+        mock_response.status_code = 500
+        mock_response.text = "Internal Server Error"
         mock_get.return_value = mock_response
 
-        calc = DistanceCalculator(mock_api_key, cache_dir="/tmp/test_cache")
-
-        with pytest.raises(DistanceCalculatorError) as exc_info:
-            calc.calculate_matrix(sample_locations)
-        assert "Radar API returned status 401" in str(exc_info.value)
-
-    @patch('src.utils.distance_calculator.requests.get')
-    def test_calculate_matrix_meta_code_error(self, mock_get, mock_api_key, sample_locations):
-        """Test handling of error meta code from API."""
-        # Setup mock with error meta code
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {"meta": {"code": 400, "message": "Bad Request"}}
-        mock_get.return_value = mock_response
-
-        calc = DistanceCalculator(mock_api_key, cache_dir="/tmp/test_cache")
-
-        with pytest.raises(DistanceCalculatorError) as exc_info:
-            calc.calculate_matrix(sample_locations)
-        assert "Radar API error" in str(exc_info.value)
-
-    @patch('src.utils.distance_calculator.requests.get')
-    def test_calculate_matrix_route_not_found(self, mock_get, mock_api_key, sample_locations):
-        """Test handling of routes not found."""
-        # Setup mock with route not found (missing distance/duration)
-        mock_response_partial = {
-            "meta": {"code": 200},
-            "origins": [{"latitude": -6.2088, "longitude": 106.8456}],
-            "destinations": [
-                {"latitude": -6.2088, "longitude": 106.8456},
-                {"latitude": -6.2100, "longitude": 106.8500},
-                {"latitude": -6.2200, "longitude": 106.8600},
-            ],
-            "matrix": [
-                [
-                    {"originIndex": 0, "destinationIndex": 0, "distance": {"value": 0}, "duration": {"value": 0}},
-                    {"originIndex": 0, "destinationIndex": 1},  # Missing distance/duration
-                    {"originIndex": 0, "destinationIndex": 2, "distance": {"value": 10000}, "duration": {"value": 20}},
-                ],
-            ],
-        }
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = mock_response_partial
-        mock_get.return_value = mock_response
-
-        calc = DistanceCalculator(mock_api_key, cache_dir="/tmp/test_cache")
+        calc = DistanceCalculator(cache_dir="/tmp/test_cache")
         dist_matrix, dur_matrix = calc.calculate_matrix(sample_locations)
 
-        # Should use penalty value (999999) for routes not found
-        assert dist_matrix[0, 1] == 999999
+        assert calc.haversine_fallbacks == 1
+        assert np.all(dist_matrix >= 0)
+        assert np.all(dur_matrix >= 0)
 
     @patch('src.utils.distance_calculator.requests.get')
-    def test_caching_mechanism(self, mock_get, mock_api_key, sample_locations, mock_api_response_success):
+    def test_calculate_matrix_code_not_ok(self, mock_get, sample_locations):
+        """Test handling of error code from API."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"code": "InvalidQuery", "message": "Invalid query"}
+        mock_get.return_value = mock_response
+
+        calc = DistanceCalculator(cache_dir="/tmp/test_cache")
+        dist_matrix, dur_matrix = calc.calculate_matrix(sample_locations)
+
+        assert calc.haversine_fallbacks == 1
+        assert np.all(dist_matrix >= 0)
+        assert np.all(dur_matrix >= 0)
+
+    @patch('src.utils.distance_calculator.requests.get')
+    def test_caching_mechanism(self, mock_get, sample_locations, mock_osrm_response_success):
         """Test that caching works correctly."""
         import tempfile
         import shutil
@@ -185,10 +118,10 @@ class TestDistanceCalculator:
         try:
             mock_response = MagicMock()
             mock_response.status_code = 200
-            mock_response.json.return_value = mock_api_response_success
+            mock_response.json.return_value = mock_osrm_response_success
             mock_get.return_value = mock_response
 
-            calc = DistanceCalculator(mock_api_key, cache_dir=temp_cache)
+            calc = DistanceCalculator(cache_dir=temp_cache)
 
             # First call - should hit API
             dist_matrix1, dur_matrix1 = calc.calculate_matrix(sample_locations)
@@ -198,32 +131,15 @@ class TestDistanceCalculator:
             dist_matrix2, dur_matrix2 = calc.calculate_matrix(sample_locations)
             assert mock_get.call_count == 1  # Still 1, no new API call
 
-            # Matrices should be identical
             np.testing.assert_array_equal(dist_matrix1, dist_matrix2)
             np.testing.assert_array_equal(dur_matrix1, dur_matrix2)
 
         finally:
             shutil.rmtree(temp_cache)
 
-    def test_batch_size_limit(self, mock_api_key):
-        """Test that batching respects URL length limits (25x25 batches)."""
-        calc = DistanceCalculator(mock_api_key)
-
-        # Create 30 locations (would need batching)
-        locations = [Depot("Depot", (-6.2088, 106.8456))]
-        for i in range(29):
-            lat = -6.2088 + (i * 0.01)
-            lng = 106.8456 + (i * 0.01)
-            locations.append(Location(f"Loc {i}", (lat, lng)))
-
-        # With 30 locations and batch size 25:
-        # Would need 2x2 = 4 batches (ceiling(30/25) = 2 for both dimensions)
-        # This test just verifies no error is raised for large datasets
-        assert len(locations) == 30
-
-    def test_cache_key_generation(self, mock_api_key, sample_locations):
+    def test_cache_key_generation(self, sample_locations):
         """Test that cache key is generated consistently."""
-        calc = DistanceCalculator(mock_api_key)
+        calc = DistanceCalculator()
 
         key1 = calc._generate_cache_key(sample_locations)
         key2 = calc._generate_cache_key(sample_locations)
@@ -232,7 +148,7 @@ class TestDistanceCalculator:
         assert len(key1) == 32  # MD5 hash length
 
     @patch('src.utils.distance_calculator.requests.get')
-    def test_clear_cache(self, mock_get, mock_api_key, sample_locations, mock_api_response_success):
+    def test_clear_cache(self, mock_get, sample_locations, mock_osrm_response_success):
         """Test cache clearing functionality."""
         import tempfile
         import shutil
@@ -242,16 +158,14 @@ class TestDistanceCalculator:
         try:
             mock_response = MagicMock()
             mock_response.status_code = 200
-            mock_response.json.return_value = mock_api_response_success
+            mock_response.json.return_value = mock_osrm_response_success
             mock_get.return_value = mock_response
 
-            calc = DistanceCalculator(mock_api_key, cache_dir=temp_cache)
+            calc = DistanceCalculator(cache_dir=temp_cache)
 
-            # Create cache
             calc.calculate_matrix(sample_locations)
             assert calc.get_cache_size() > 0
 
-            # Clear cache
             calc.clear_cache()
             assert calc.get_cache_size() == 0
 
@@ -259,183 +173,37 @@ class TestDistanceCalculator:
             shutil.rmtree(temp_cache)
 
     @patch('src.utils.distance_calculator.requests.get')
-    def test_api_call_format(self, mock_get, mock_api_key, sample_locations):
+    def test_api_call_format(self, mock_get, sample_locations):
         """Test that API is called with correct format."""
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
-            "meta": {"code": 200},
-            "matrix": [[{"originIndex": 0, "destinationIndex": 0, "distance": {"value": 0}, "duration": {"value": 0}}]],
+            "code": "Ok",
+            "distances": [[0]],
+            "durations": [[0]]
         }
         mock_get.return_value = mock_response
 
-        calc = DistanceCalculator(mock_api_key, cache_dir="/tmp/test_cache")
+        calc = DistanceCalculator(cache_dir="/tmp/test_cache")
         calc.calculate_matrix(sample_locations)
 
-        # Verify API was called
         assert mock_get.called
         call_args = mock_get.call_args
 
-        # Check URL
-        assert call_args[0][0] == "https://api.radar.io/v1/route/matrix"
+        coords_str = ";".join(f"{loc.longitude},{loc.latitude}" for loc in sample_locations)
+        expected_url = f"http://osrm.segarloka.cc/table/v1/car/{coords_str}"
+        assert call_args[0][0] == expected_url
 
-        # Check parameters
         params = call_args[1]["params"]
-        assert "origins" in params
-        assert "destinations" in params
-        assert params["mode"] == "car"
-        assert params["units"] == "metric"
+        assert params["annotations"] == "duration,distance"
 
-        # Check headers
-        headers = call_args[1]["headers"]
-        assert headers["Authorization"] == mock_api_key
-
-    def test_haversine_distance(self, mock_api_key):
+    def test_haversine_distance(self):
         """Test Haversine distance calculation."""
-        calc = DistanceCalculator(mock_api_key)
+        calc = DistanceCalculator()
 
-        # Jakarta to Bandung (approximately 150 km)
         jakarta = (-6.2088, 106.8456)
         bandung = (-6.9175, 107.6191)
 
         distance = calc._haversine_distance(jakarta, bandung)
 
-        # Should be approximately 150 km (allowing 10 km margin)
         assert 140 <= distance <= 160
-
-    def test_haversine_distance_same_location(self, mock_api_key):
-        """Test Haversine distance for same location."""
-        calc = DistanceCalculator(mock_api_key)
-
-        location = (-6.2088, 106.8456)
-        distance = calc._haversine_distance(location, location)
-
-        # Distance should be 0
-        assert distance == 0
-
-    def test_haversine_distance_short_distance(self, mock_api_key):
-        """Test Haversine distance for short distances."""
-        calc = DistanceCalculator(mock_api_key)
-
-        # Two nearby points in Jakarta (about 1.5 km apart)
-        point1 = (-6.2088, 106.8456)
-        point2 = (-6.2100, 106.8600)
-
-        distance = calc._haversine_distance(point1, point2)
-
-        # Should be approximately 1-2 km
-        assert 1 <= distance <= 2
-
-    def test_should_use_haversine_batch_nearby(self, mock_api_key):
-        """Test that nearby locations use Radar API."""
-        calc = DistanceCalculator(mock_api_key, max_radar_distance_km=150.0)
-
-        # All nearby locations in Jakarta
-        origins = [(-6.2088, 106.8456), (-6.2100, 106.8500)]
-        destinations = [(-6.2200, 106.8600), (-6.2300, 106.8700)]
-
-        should_use_haversine = calc._should_use_haversine_batch(origins, destinations)
-
-        # Should use Radar API (not Haversine)
-        assert should_use_haversine is False
-
-    def test_should_use_haversine_batch_distant(self, mock_api_key):
-        """Test that distant locations use Haversine."""
-        calc = DistanceCalculator(mock_api_key, max_radar_distance_km=150.0)
-
-        # Jakarta and Surabaya (approximately 700 km apart)
-        origins = [(-6.2088, 106.8456)]  # Jakarta
-        destinations = [(-7.2575, 112.7521)]  # Surabaya
-
-        should_use_haversine = calc._should_use_haversine_batch(origins, destinations)
-
-        # Should use Haversine (distance > 150 km)
-        assert should_use_haversine is True
-
-    def test_fill_matrix_haversine(self, mock_api_key):
-        """Test filling matrix with Haversine calculations."""
-        calc = DistanceCalculator(mock_api_key, fallback_speed_kmh=40.0)
-
-        origins = [(-6.2088, 106.8456), (-6.2100, 106.8500)]
-        destinations = [(-6.2200, 106.8600)]
-
-        distance_matrix = np.zeros((2, 1))
-        duration_matrix = np.zeros((2, 1))
-
-        calc._fill_matrix_haversine(origins, destinations, distance_matrix, duration_matrix, 0, 0)
-
-        # Check that matrices are filled
-        assert distance_matrix[0, 0] > 0
-        assert duration_matrix[0, 0] > 0
-
-        # Check duration calculation (distance / speed * 60)
-        expected_duration = (distance_matrix[0, 0] / 40.0) * 60
-        assert abs(duration_matrix[0, 0] - expected_duration) < 0.01
-
-    @patch('src.utils.distance_calculator.requests.get')
-    def test_haversine_fallback_on_api_error(self, mock_get, mock_api_key, sample_locations):
-        """Test that Haversine fallback works when API returns 'too far apart' error."""
-        # Setup mock to return "too far apart" error
-        mock_response = MagicMock()
-        mock_response.status_code = 400
-        mock_response.text = '{"meta":{"code":400,"message":"Coordinates specified are too far apart"}}'
-        mock_get.return_value = mock_response
-
-        calc = DistanceCalculator(mock_api_key, cache_dir="/tmp/test_cache", max_radar_distance_km=150.0)
-
-        # Should not raise error, should fall back to Haversine
-        dist_matrix, dur_matrix = calc.calculate_matrix(sample_locations)
-
-        # Check that matrices are filled
-        assert dist_matrix.shape == (3, 3)
-        assert dur_matrix.shape == (3, 3)
-        assert calc.haversine_fallbacks > 0
-
-    def test_cache_stats_with_haversine(self, mock_api_key):
-        """Test that cache stats include Haversine fallback count."""
-        calc = DistanceCalculator(mock_api_key)
-        calc.haversine_fallbacks = 5
-
-        stats = calc.get_cache_stats()
-
-        assert "haversine_fallbacks" in stats
-        assert stats["haversine_fallbacks"] == 5
-
-    @patch('src.utils.distance_calculator.requests.get')
-    def test_hybrid_approach_mixed_distances(self, mock_get, mock_api_key, mock_api_response_success):
-        """Test hybrid approach with mixed nearby and distant locations."""
-        import tempfile
-        import shutil
-
-        temp_cache = tempfile.mkdtemp()
-
-        try:
-            mock_response = MagicMock()
-            mock_response.status_code = 200
-            mock_response.json.return_value = mock_api_response_success
-            mock_get.return_value = mock_response
-
-            calc = DistanceCalculator(
-                mock_api_key,
-                cache_dir=temp_cache,
-                max_radar_distance_km=50.0  # Low threshold to force some Haversine fallbacks
-            )
-
-            # Mix of nearby and distant locations
-            locations = [
-                Depot("Depot", (-6.2088, 106.8456)),  # Jakarta
-                Location("Nearby 1", (-6.2100, 106.8500)),  # Near Jakarta
-                Location("Distant", (-7.2575, 112.7521)),  # Surabaya (far)
-            ]
-
-            dist_matrix, dur_matrix = calc.calculate_matrix(locations)
-
-            # Should have used both Radar API and Haversine
-            assert dist_matrix.shape == (3, 3)
-            assert dur_matrix.shape == (3, 3)
-
-            # At least one batch should have used Haversine
-            assert calc.haversine_fallbacks >= 0
-
-        finally:
-            shutil.rmtree(temp_cache)

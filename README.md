@@ -21,7 +21,7 @@ seg-vrp/
 │   ├── utils/              # Helper utilities
 │   │   ├── csv_parser.py   # CSV order data parser
 │   │   ├── yaml_parser.py  # YAML vehicle config parser
-│   │   └── distance_calculator.py  # Google Maps API integration
+│   │   └── distance_calculator.py  # OSRM API integration
 │   ├── output/             # Excel output generator (Phase 2)
 │   └── config/             # Configuration files
 ├── example/
@@ -75,12 +75,11 @@ seg-vrp/
   - Validates vehicle specs (capacity, cost)
   - Supports unlimited fleet configuration
 
-#### 1.4 Radar API Integration ✅
+#### 1.4 OSRM API Integration ✅
 - **Distance Calculator** (`src/utils/distance_calculator.py`)
-  - Radar Distance Matrix API client
+  - OSRM Distance Matrix API client
   - Calculates distance and duration matrices
   - Intelligent caching to minimize API calls
-  - Batch processing for large location sets
   - Comprehensive error handling
 
 #### 1.5 VRP Solver (OR-Tools) ✅
@@ -111,7 +110,6 @@ uv sync
 
 # Configure environment
 cp .env.example .env
-# Edit .env and add your Radar API key
 ```
 
 ### 2. Prepare Input Files
@@ -148,7 +146,7 @@ fleet = YAMLParser("example/example_input_vehicle.yaml").parse()
 depot = Depot("Segarloka Warehouse", (-6.2088, 106.8456))
 
 # Calculate distances
-calculator = DistanceCalculator(api_key="YOUR_API_KEY")
+calculator = DistanceCalculator()
 locations = [depot] + [order to Location for each order]
 distance_matrix, duration_matrix = calculator.calculate_matrix(locations)
 
@@ -182,16 +180,14 @@ Phase 2 will implement the Excel output generator:
 3. **Balanced**: Balances both objectives (uses Automatic metaheuristic)
 
 ### API Integration
-- Radar Distance Matrix API for accurate distances
+- OSRM Distance Matrix API for accurate distances
 - Caching system to minimize API calls and costs
-- Batch processing for large datasets (25×25 chunks)
 
 ## 📝 Environment Variables
 
 Required in `.env` file:
 
 ```env
-RADAR_API_KEY=your_radar_api_key_here
 DEPOT_LATITUDE=-6.2088
 DEPOT_LONGITUDE=106.8456
 DEPOT_NAME=Segarloka Warehouse

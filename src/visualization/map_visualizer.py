@@ -31,18 +31,17 @@ class MapVisualizer:
         '#118AB2', '#073B4C', '#EF476F', '#FFD166', '#06FFA5'
     ]
 
-    def __init__(self, depot: Depot, radar_api_key: Optional[str] = None, enable_road_routing: bool = True):
+    def __init__(self, depot: Depot, enable_road_routing: bool = True):
         """
         Initialize the map visualizer
 
         Args:
             depot: Depot location
-            radar_api_key: Radar API key for road routing (optional)
             enable_road_routing: Whether to use actual road paths vs straight lines
         """
         self.depot = depot
-        self.radar_api_key = radar_api_key or os.getenv("RADAR_API_KEY")
-        self.enable_road_routing = enable_road_routing and bool(self.radar_api_key)
+        self.osrm_url = "http://osrm.segarloka.cc"
+        self.enable_road_routing = enable_road_routing
 
         # Cache directory for route geometries
         self.cache_dir = Path(".cache/route_geometry")
@@ -163,7 +162,7 @@ class MapVisualizer:
 
     def _get_road_path(self, start_coords: Tuple[float, float], end_coords: Tuple[float, float]) -> List[List[float]]:
         """
-        Get actual road path between two coordinates using Radar Routes API
+        Get actual road path between two coordinates using OSRM Route API
 
         Args:
             start_coords: (lat, lon) starting coordinates
@@ -191,77 +190,38 @@ class MapVisualizer:
             except:
                 pass  # Cache read failed, fetch from API
 
-        # Fetch from Radar API
+        # Fetch from OSRM API
         try:
-            url = "https://api.radar.io/v1/route/directions"
-            headers = {
-                "Authorization": self.radar_api_key,
-                "Content-Type": "application/json"
-            }
+            lon1, lat1 = start_coords[1], start_coords[0]
+            lon2, lat2 = end_coords[1], end_coords[0]
+            url = f"{self.osrm_url}/route/v1/car/{lon1},{lat1};{lon2},{lat2}"
             params = {
-                "locations": f"{start_coords[0]},{start_coords[1]}|{end_coords[0]},{end_coords[1]}",
-                "mode": "car",
-                "geometry": "polyline6"
+                "overview": "full",
+                "geometries": "polyline"
             }
 
-            response = requests.get(url, headers=headers, params=params, timeout=10)
+            response = requests.get(url, params=params, timeout=10)
 
-            # Check for successful response
             if response.status_code == 200:
                 data = response.json()
+                if data.get('code') == 'Ok' and data.get('routes'):
+                    route_geometry = data['routes'][0]['geometry']
+                    decoded = polyline.decode(route_geometry)
+                    path = [[lat, lon] for lat, lon in decoded]
 
-                # Validate response structure
-                if "routes" in data and len(data["routes"]) > 0:
-                    route_data = data["routes"][0]
+                    # Cache the result
+                    try:
+                        with open(cache_file, 'w') as f:
+                            json.dump({"path": path}, f)
+                    except Exception:
+                        pass  # Cache write failed, not critical
 
-                    # Extract polyline from correct location in response
-                    polyline_data = None
-                    if "geometry" in route_data:
-                        geometry = route_data["geometry"]
-                        # Check if geometry is a dict with 'polyline' key
-                        if isinstance(geometry, dict) and "polyline" in geometry:
-                            polyline_data = geometry["polyline"]
-                        # Or if geometry is directly a string
-                        elif isinstance(geometry, str):
-                            polyline_data = geometry
+                    return path
 
-                    if polyline_data:
-                        # Decode polyline6 format
-                        try:
-                            decoded = polyline.decode(polyline_data, precision=6)
-                            path = [[lat, lon] for lat, lon in decoded]
-
-                            # Cache the result
-                            try:
-                                with open(cache_file, 'w') as f:
-                                    json.dump({"path": path}, f)
-                            except Exception:
-                                pass  # Cache write failed, not critical
-
-                            return path
-                        except Exception as decode_error:
-                            # Polyline decode failed
-                            pass
-            else:
-                # Log detailed error for debugging
-                try:
-                    error_data = response.json()
-                    error_msg = error_data.get('meta', {}).get('message', 'Unknown error')
-                except:
-                    error_msg = f"HTTP {response.status_code}"
-
-                # Only print on first error to avoid spam
-                pass
-
-        except requests.exceptions.Timeout:
-            # Timeout - silently fall back
-            pass
-        except requests.exceptions.RequestException as e:
-            # Network error - silently fall back
-            pass
-        except Exception as e:
-            # Any other error - silently fall back
-            pass
+        except requests.exceptions.RequestException:
+            pass  # Network error - silently fall back
+        except Exception:
+            pass  # Any other error - silently fall back
 
         # Fallback to straight line (always works)
         return [list(start_coords), list(end_coords)]
