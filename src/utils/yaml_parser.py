@@ -84,6 +84,8 @@ class YAMLParser:
         priority_time_tolerance = routing_config.get("priority_time_tolerance", 0)
         non_priority_time_tolerance = routing_config.get("non_priority_time_tolerance", 20)
         multiple_trips = routing_config.get("multiple_trips", True)
+        relax_time_windows = routing_config.get("relax_time_windows", False)
+        time_window_relaxation_minutes = routing_config.get("time_window_relaxation_minutes", 0)
 
         # Create fleet
         try:
@@ -93,6 +95,8 @@ class YAMLParser:
                 priority_time_tolerance=priority_time_tolerance,
                 non_priority_time_tolerance=non_priority_time_tolerance,
                 multiple_trips=multiple_trips,
+                relax_time_windows=relax_time_windows,
+                time_window_relaxation_minutes=time_window_relaxation_minutes,
             )
         except Exception as e:
             raise YAMLParserError(f"Error creating vehicle fleet: {str(e)}")

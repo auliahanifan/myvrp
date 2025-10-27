@@ -492,8 +492,27 @@ def render_results_section():
     with col7:
         st.metric("Optimization Strategy", solution.optimization_strategy.replace("_", " ").title())
 
-    with col8:
-        st.metric("Computation Time", f"{solution.computation_time:.2f}s")
+    # Unassigned orders section
+    if solution.unassigned_orders:
+        st.markdown("---")
+        st.subheader("⚠️ Unassigned Orders")
+        st.warning(
+            f"**{len(solution.unassigned_orders)} orders could not be assigned to any vehicle.** "
+            f"This might be due to tight time windows, capacity limits, or unreachable locations."
+        )
+
+        unassigned_data = []
+        for order in solution.unassigned_orders:
+            unassigned_data.append({
+                "Customer": order.display_name,
+                "Address": order.alamat,
+                "Delivery Time": order.delivery_time,
+                "Weight (kg)": order.load_weight_in_kg,
+                "Priority": "✅" if order.is_priority else ""
+            })
+        
+        df_unassigned = pd.DataFrame(unassigned_data)
+        st.dataframe(df_unassigned, use_container_width=True)
 
     st.markdown("---")
 

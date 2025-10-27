@@ -268,6 +268,9 @@ class VRPSolver:
             # Adjust time window end with tolerance
             time_window_end_adjusted = time_window_end + tolerance
 
+            if self.fleet.relax_time_windows:
+                time_window_end_adjusted += self.fleet.time_window_relaxation_minutes
+
             time_dimension.CumulVar(index).SetRange(
                 time_window_start, time_window_end_adjusted
             )

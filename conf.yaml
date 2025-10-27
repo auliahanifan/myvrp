@@ -25,7 +25,7 @@ vehicles:
   - name: "Sepeda Motor"
     capacity: 80  # kg
     cost_per_km: 1500  # Rupiah per kilometer (LOWEST)
-    fixed_count: 15  # 15 base units
+    fixed_count: 50  # 15 base units
     unlimited: false  # Can add more on demand
 
 # Routing configuration
@@ -34,6 +34,8 @@ routing:
   priority_time_tolerance: 0  # Priority orders must be within time window (in minutes)
   non_priority_time_tolerance: 20  # Non-priority can be late up to 20 minutes
   multiple_trips: true  # Allow vehicles to do multiple trips per day
+  relax_time_windows: false # if true, solver will relax time window constraint
+  time_window_relaxation_minutes: 15 # minutes to relax time window
 
 # Cache configuration for Radar API (cost optimization)
 cache:

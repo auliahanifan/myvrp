@@ -76,6 +76,8 @@ class VehicleFleet:
     priority_time_tolerance: int = 0
     non_priority_time_tolerance: int = 20
     multiple_trips: bool = True
+    relax_time_windows: bool = False
+    time_window_relaxation_minutes: int = 0
 
     def __post_init__(self):
         """Validate fleet data."""
