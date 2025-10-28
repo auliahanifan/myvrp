@@ -3,8 +3,9 @@ YAML parser for vehicle configuration.
 Parses vehicle config YAML files and creates Vehicle objects with validation.
 """
 import yaml
-from typing import List
+from typing import List, Optional, Dict
 from ..models.vehicle import Vehicle, VehicleFleet
+from .hub_routing import parse_hub_config
 
 
 class YAMLParserError(Exception):
@@ -119,6 +120,28 @@ class YAMLParser:
             "ttl_hours": cache_config.get("ttl_hours", 24),
             "directory": cache_config.get("directory", ".cache"),
         }
+
+    def get_hub_config(self) -> Optional[Dict]:
+        """
+        Parse hub configuration from YAML.
+
+        Returns:
+            Dictionary with hub configuration or None if hub not enabled
+
+        Raises:
+            YAMLParserError: If hub configuration is invalid
+        """
+        if self.data is None:
+            return None
+
+        hub_config = self.data.get("hub", {})
+        if not hub_config.get("enabled", False):
+            return None
+
+        try:
+            return parse_hub_config(hub_config)
+        except ValueError as e:
+            raise YAMLParserError(f"Error parsing hub configuration: {str(e)}")
 
     def _parse_vehicles(self) -> List[tuple[Vehicle, int, bool]]:
         """

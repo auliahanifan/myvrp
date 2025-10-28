@@ -63,3 +63,21 @@ class Depot(Location):
     def __repr__(self) -> str:
         """String representation of the depot."""
         return f"Depot({self.name}, {self.coordinates})"
+
+
+@dataclass
+class Hub(Location):
+    """
+    Represents a hub for two-tier delivery routing.
+    Used for consolidation: Blind Van (DEPOT -> HUB), then Sepeda Motor (HUB -> Customer).
+    """
+
+    def __post_init__(self):
+        """Validate hub data."""
+        super().__post_init__()
+        if not self.name:
+            self.name = "Hub"
+
+    def __repr__(self) -> str:
+        """String representation of the hub."""
+        return f"Hub({self.name}, {self.coordinates})"

@@ -16,7 +16,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from src.models.location import Depot
+from src.models.location import Depot, Hub
 from src.models.route import RoutingSolution, Route
 
 
@@ -31,15 +31,17 @@ class MapVisualizer:
         '#118AB2', '#073B4C', '#EF476F', '#FFD166', '#06FFA5'
     ]
 
-    def __init__(self, depot: Depot, enable_road_routing: bool = True):
+    def __init__(self, depot: Depot, hub: Optional[Hub] = None, enable_road_routing: bool = True):
         """
         Initialize the map visualizer
 
         Args:
             depot: Depot location
+            hub: Hub location (optional, for two-tier routing)
             enable_road_routing: Whether to use actual road paths vs straight lines
         """
         self.depot = depot
+        self.hub = hub
         self.osrm_url = "http://osrm.segarloka.cc"
         self.enable_road_routing = enable_road_routing
 
@@ -68,6 +70,10 @@ class MapVisualizer:
 
         # Add depot marker
         self._add_depot_marker(m)
+
+        # Add hub marker if hub is enabled
+        if self.hub:
+            self._add_hub_marker(m)
 
         # Add routes with different colors
         for idx, route in enumerate(solution.routes):
@@ -112,6 +118,10 @@ class MapVisualizer:
 
         # Add depot marker
         self._add_depot_marker(m)
+
+        # Add hub marker if hub is enabled
+        if self.hub:
+            self._add_hub_marker(m)
 
         # Add only the selected route with highlighted color
         color = '#FF0000'  # Bright red for single route
@@ -158,6 +168,53 @@ class MapVisualizer:
             fillOpacity=0.1,
             weight=2,
             opacity=0.5
+        ).add_to(m)
+
+    def _add_hub_marker(self, m: folium.Map):
+        """Add hub marker to map for two-tier routing"""
+        if not self.hub:
+            return
+
+        folium.Marker(
+            location=[self.hub.coordinates[0], self.hub.coordinates[1]],
+            popup=folium.Popup(
+                f"<b>📦 HUB</b><br>"
+                f"{self.hub.name}<br>"
+                f"{self.hub.address}<br>"
+                f"<i>{self.hub.coordinates[0]:.6f}, {self.hub.coordinates[1]:.6f}</i>",
+                max_width=300
+            ),
+            tooltip="📦 Hub (Consolidation Point)",
+            icon=folium.Icon(
+                color='blue',
+                icon='cube',
+                prefix='fa'
+            )
+        ).add_to(m)
+
+        # Add a circle around hub (larger than depot)
+        folium.Circle(
+            location=[self.hub.coordinates[0], self.hub.coordinates[1]],
+            radius=300,
+            color='blue',
+            fill=True,
+            fillColor='blue',
+            fillOpacity=0.15,
+            weight=2,
+            opacity=0.6
+        ).add_to(m)
+
+        # Add label text
+        folium.Marker(
+            location=[self.hub.coordinates[0], self.hub.coordinates[1]],
+            popup="📦 Hub",
+            icon=folium.DivIcon(html="""
+                <div style="font-size: 12px; color: blue; font-weight: bold;
+                            background-color: white; padding: 3px 6px;
+                            border-radius: 3px; border: 1px solid blue;">
+                    HUB
+                </div>
+            """)
         ).add_to(m)
 
     def _get_road_path(self, start_coords: Tuple[float, float], end_coords: Tuple[float, float]) -> List[List[float]]:

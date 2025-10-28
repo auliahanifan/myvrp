@@ -5,40 +5,72 @@
 vehicles:
   # Highest priority: Blind Van (most expensive, largest capacity)
   - name: "Blind Van"
-    capacity: 800  # kg
-    cost_per_km: 10000  # Rupiah per kilometer (HIGHEST)
-    fixed_count: 1  # Only 1 unit available
+    capacity: 800 # kg
+    cost_per_km: 10000 # Rupiah per kilometer (HIGHEST)
+    fixed_count: 1 # Only 1 unit available
 
   # Second priority: City Car (high cost, good capacity)
   - name: "City Car 350kg"
-    capacity: 350  # kg
-    cost_per_km: 6000  # Rupiah per kilometer
-    fixed_count: 2  # 2 units available
+    capacity: 350 # kg
+    cost_per_km: 6000 # Rupiah per kilometer
+    fixed_count: 2 # 2 units available
 
   # Third priority: Mobil (medium cost, medium capacity)
   - name: "City Car 250kg"
-    capacity: 250  # kg
-    cost_per_km: 4000  # Rupiah per kilometer
-    fixed_count: 1  # Only 1 unit available
+    capacity: 250 # kg
+    cost_per_km: 4000 # Rupiah per kilometer
+    fixed_count: 1 # Only 1 unit available
 
   # Last priority: Sepeda Motor (cheapest, smallest capacity, unlimited on-demand)
   - name: "Sepeda Motor"
-    capacity: 80  # kg
-    cost_per_km: 1500  # Rupiah per kilometer (LOWEST)
-    fixed_count: 50  # 15 base units
-    unlimited: false  # Can add more on demand
+    capacity: 80 # kg
+    cost_per_km: 1500 # Rupiah per kilometer (LOWEST)
+    fixed_count: 50 # 15 base units
+    unlimited: false # Can add more on demand
 
 # Routing configuration
 routing:
-  return_to_depot: true  # Set to false if vehicles can end anywhere
-  priority_time_tolerance: 0  # Priority orders must be within time window (in minutes)
-  non_priority_time_tolerance: 20  # Non-priority can be late up to 20 minutes
-  multiple_trips: true  # Allow vehicles to do multiple trips per day
+  return_to_depot: true # Set to false if vehicles can end anywhere
+  priority_time_tolerance: 0 # Priority orders must be within time window (in minutes)
+  non_priority_time_tolerance: 20 # Non-priority can be late up to 20 minutes
+  multiple_trips: true # Allow vehicles to do multiple trips per day
   relax_time_windows: false # if true, solver will relax time window constraint
   time_window_relaxation_minutes: 15 # minutes to relax time window
 
+# Hub configuration for two-tier delivery routing
+hub:
+  enabled: true # Enable hub-based routing for Blind Van + Motor
+  location:
+    name: "Hub Utara"
+    latitude: -6.164667483144517
+    longitude: 106.87160878270096
+    address: "Kedung Kesenian"
+
+  # Zone-based routing: Orders from these zones will be routed via hub
+  # (Blind Van: DEPOT → HUB, then Sepeda Motor: HUB → Customer)
+  zones_via_hub:
+    - "JAKARTA UTARA"
+    - "JAKARTA BARAT"
+    - "TANGERANG"
+    - "BEKASI UTARA"
+    # Add more zones as needed
+
+  # Blind Van schedule for hub consolidation
+  blind_van_schedule:
+    departure_time: "05:30" # Depart from DEPOT (330 minutes from midnight)
+    arrival_time: "06:00" # Must arrive at HUB before this (360 minutes)
+    vehicle_name: "Blind Van" # Which vehicle type is used for consolidation
+
+  # Sepeda Motor can serve from both HUB and DEPOT
+  # If order is from hub zone, prioritize HUB start
+  # Otherwise, automatic optimization decides (DEPOT or HUB)
+  motor_routing:
+    can_depart_from_depot: true # Motor can start from main depot
+    can_depart_from_hub: true # Motor can start from hub
+    start_delivery_after: "06:00" # Sepeda Motor can start delivery after hub delivery starts (360 minutes)
+
 # Cache configuration for Radar API (cost optimization)
 cache:
-  enabled: true  # Enable/disable distance matrix caching
-  ttl_hours: 72  # Cache time-to-live in hours (default: 24)
-  directory: ".cache"  # Directory for cache files
+  enabled: false # Enable/disable distance matrix caching
+  ttl_hours: 72 # Cache time-to-live in hours (default: 24)
+  directory: ".cache" # Directory for cache files
