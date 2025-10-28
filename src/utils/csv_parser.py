@@ -157,6 +157,11 @@ class CSVParser:
         if "is_priority" in row and not pd.isna(row["is_priority"]):
             is_priority = self._parse_boolean(row["is_priority"])
 
+        # Parse city (optional)
+        kota = None
+        if "kota" in row and not pd.isna(row["kota"]):
+            kota = str(row["kota"]).strip()
+
         # Create Order object (validation happens in __post_init__)
         order = Order(
             sale_order_id=str(row["sale_order_id"]).strip(),
@@ -167,6 +172,7 @@ class CSVParser:
             display_name=str(row["display_name"]).strip(),
             alamat=str(row["alamat"]).strip(),
             coordinates=coordinates,
+            kota=kota,
             is_priority=is_priority,
         )
 

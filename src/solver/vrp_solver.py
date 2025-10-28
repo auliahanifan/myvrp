@@ -74,6 +74,13 @@ class VRPSolver:
         # Get all vehicles from fleet
         self.vehicles = fleet.get_all_vehicles()
 
+        # Create a list of unique cities and a mapping from location to city index
+        self.cities = sorted(list(set(o.kota for o in orders if o.kota)))
+        self.city_map = {city: i for i, city in enumerate(self.cities)}
+        self.location_to_city = [-1] + [
+            self.city_map.get(o.kota, -1) for o in orders
+        ]  # -1 for depot or if city not found
+
         # Initialize OR-Tools components
         self.manager = None
         self.routing = None
@@ -124,6 +131,7 @@ class VRPSolver:
         # Add constraints
         self._add_capacity_constraint()
         self._add_time_window_constraint()
+        self._add_city_constraint()
 
         # Allow dropping nodes (orders) if they can't be satisfied
         # This prevents the solver from failing completely
@@ -284,6 +292,46 @@ class VRPSolver:
             self.routing.AddVariableMinimizedByFinalizer(
                 time_dimension.CumulVar(self.routing.Start(i))
             )
+
+    def _add_city_constraint(self):
+        """Add constraint to limit the number of cities per vehicle to 2."""
+        num_cities = len(self.cities)
+        if num_cities == 0:
+            return
+
+        solver = self.routing.solver()
+
+        for vehicle_id in range(self.routing.vehicles()):
+            cities_visited_for_vehicle = []
+            for city_index in range(num_cities):
+                nodes_in_city = [
+                    self.manager.NodeToIndex(loc_idx)
+                    for loc_idx, loc_city_index in enumerate(self.location_to_city)
+                    if loc_city_index == city_index
+                ]
+
+                if not nodes_in_city:
+                    continue
+
+                node_visited_by_vehicle_vars = []
+                for node in nodes_in_city:
+                    is_node_visited_by_vehicle = solver.BoolVar(f"node_{node}_visited_by_vehicle_{vehicle_id}")
+                    
+                    # is_node_visited_by_vehicle = ActiveVar(node) AND (VehicleVar(node) == vehicle_id)
+                    # We can use multiplication for AND since they are 0/1 variables.
+                    solver.Add(
+                        is_node_visited_by_vehicle == self.routing.ActiveVar(node) * (self.routing.VehicleVar(node) == vehicle_id)
+                    )
+                    node_visited_by_vehicle_vars.append(is_node_visited_by_vehicle)
+
+                is_city_visited = solver.BoolVar(f"city_{city_index}_visited_by_vehicle_{vehicle_id}")
+                # is_city_visited = OR(node_visited_by_vehicle_vars)
+                # This is equivalent to Max(node_visited_by_vehicle_vars)
+                solver.Add(is_city_visited == solver.Max(node_visited_by_vehicle_vars))
+                cities_visited_for_vehicle.append(is_city_visited)
+
+            if cities_visited_for_vehicle:
+                solver.Add(solver.Sum(cities_visited_for_vehicle) <= 2)
 
     def _get_search_parameters(
         self, optimization_strategy: str, time_limit: int

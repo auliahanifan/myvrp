@@ -31,6 +31,7 @@ class Order:
     display_name: str
     alamat: str
     coordinates: Tuple[float, float]  # (latitude, longitude)
+    kota: Optional[str] = None
     is_priority: bool = False
 
     def __post_init__(self):
@@ -163,6 +164,6 @@ class Order:
         """String representation of the order."""
         priority_flag = " [PRIORITY]" if self.is_priority else ""
         return (
-            f"Order({self.sale_order_id}, {self.display_name}, "
+            f"Order({self.sale_order_id}, {self.display_name}, {self.kota}, "
             f"{self.load_weight_in_kg}kg, {self.delivery_time}{priority_flag})"
         )
