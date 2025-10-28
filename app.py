@@ -20,12 +20,14 @@ from streamlit_folium import st_folium
 load_dotenv()
 
 # Import project modules
-from src.models.location import Depot, Location
+from src.models.location import Depot, Location, Hub
 from src.models.order import Order
 from src.utils.csv_parser import CSVParser
 from src.utils.yaml_parser import YAMLParser
 from src.utils.distance_calculator import DistanceCalculator
+from src.utils.hub_routing import HubRoutingManager
 from src.solver.vrp_solver import VRPSolver
+from src.solver.two_tier_vrp_solver import TwoTierVRPSolver
 from src.output.excel_generator import ExcelGenerator
 from src.visualization.map_visualizer import MapVisualizer
 
@@ -96,6 +98,12 @@ def initialize_session_state():
         st.session_state.excel_path = None
     if 'depot' not in st.session_state:
         st.session_state.depot = None
+    if 'hub' not in st.session_state:
+        st.session_state.hub = None
+    if 'hub_config' not in st.session_state:
+        st.session_state.hub_config = None
+    if 'hub_manager' not in st.session_state:
+        st.session_state.hub_manager = None
 
 
 def get_depot_from_env():
@@ -110,6 +118,23 @@ def get_depot_from_env():
         coordinates=(depot_lat, depot_lon),
         address=depot_address
     )
+
+
+def get_hub_from_yaml():
+    """Load hub configuration from conf.yaml if enabled"""
+    try:
+        parser = YAMLParser("conf.yaml")
+        parser.parse()  # Load data first
+        hub_config = parser.get_hub_config()
+
+        if hub_config is None:
+            return None, None
+
+        hub = hub_config.get("hub")
+        return hub, hub_config
+    except Exception as e:
+        st.warning(f"⚠️ Could not load hub configuration: {str(e)}")
+        return None, None
 
 
 def render_header():
@@ -305,19 +330,42 @@ def render_configuration_section():
         )
 
     with col2:
-        st.subheader("Lokasi Depot")
+        st.subheader("Lokasi Depot & Hub")
 
         depot = get_depot_from_env()
         st.session_state.depot = depot
 
-        st.write(f"**Nama:** {depot.name}")
-        st.write(f"**Alamat:** {depot.address}")
-        st.write(f"**Koordinat:** {depot.coordinates[0]:.6f}, {depot.coordinates[1]:.6f}")
+        st.write(f"**Depot - Nama:** {depot.name}")
+        st.write(f"**Depot - Alamat:** {depot.address}")
+        st.write(f"**Depot - Koordinat:** {depot.coordinates[0]:.6f}, {depot.coordinates[1]:.6f}")
 
-        st.markdown(
-            '<div class="info-box">ℹ️ Lokasi depot dikonfigurasi via .env file</div>',
-            unsafe_allow_html=True
-        )
+        # Load and display hub configuration
+        hub, hub_config = get_hub_from_yaml()
+        st.session_state.hub = hub
+        st.session_state.hub_config = hub_config
+
+        if hub:
+            st.markdown("---")
+            st.write(f"**Hub - Nama:** {hub.name}")
+            st.write(f"**Hub - Alamat:** {hub.address}")
+            st.write(f"**Hub - Koordinat:** {hub.coordinates[0]:.6f}, {hub.coordinates[1]:.6f}")
+
+            if hub_config:
+                st.write(f"**Blind Van Depart:** {hub_config.get('blind_van_departure', 'N/A')} min")
+                st.write(f"**Blind Van Arrival:** {hub_config.get('blind_van_arrival', 'N/A')} min")
+                st.write(f"**Motor Start Delivery:** {hub_config.get('motor_start_time', 'N/A')} min")
+                zones = hub_config.get("zones_via_hub", [])
+                st.write(f"**Zones via Hub:** {', '.join(zones) if zones else 'None'}")
+
+            st.markdown(
+                '<div class="info-box">✅ Hub-based two-tier routing enabled</div>',
+                unsafe_allow_html=True
+            )
+        else:
+            st.markdown(
+                '<div class="info-box">ℹ️ Hub routing not enabled. Single-tier routing active.</div>',
+                unsafe_allow_html=True
+            )
 
     return optimization_strategy, time_limit
 
@@ -351,12 +399,55 @@ def render_processing_section(optimization_strategy, time_limit):
             orders = st.session_state.orders
             fleet = st.session_state.fleet
             depot = st.session_state.depot
+            hub = st.session_state.hub
+            hub_config = st.session_state.hub_config
+
+            # Classify orders by hub routing if hub is enabled
+            hub_manager = None
+            if hub and hub_config:
+                try:
+                    hub_manager = HubRoutingManager(
+                        hub=hub,
+                        depot=depot,
+                        zones_via_hub=hub_config.get("zones_via_hub", []),
+                        blind_van_arrival_time=hub_config.get("blind_van_arrival", 360),
+                        motor_start_time=hub_config.get("motor_start_time", 360),
+                    )
+                    st.session_state.hub_manager = hub_manager
+
+                    # Display hub routing summary
+                    summary = hub_manager.get_hub_routing_summary(orders)
+                    with st.expander("📊 Hub Routing Summary"):
+                        col_summary1, col_summary2, col_summary3 = st.columns(3)
+                        with col_summary1:
+                            st.metric("Hub Orders", summary["hub_orders_count"])
+                        with col_summary2:
+                            st.metric("Direct Orders", summary["direct_orders_count"])
+                        with col_summary3:
+                            st.metric("Hub %", f"{summary['hub_percentage']:.1f}%")
+
+                        col_weight1, col_weight2 = st.columns(2)
+                        with col_weight1:
+                            st.metric("Hub Weight (kg)", f"{summary['hub_total_weight_kg']:.1f}")
+                        with col_weight2:
+                            st.metric("Direct Weight (kg)", f"{summary['direct_total_weight_kg']:.1f}")
+
+                except Exception as e:
+                    st.warning(f"⚠️ Hub routing initialization failed: {str(e)}")
 
             # Create locations list
-            locations = [depot] + [
-                Location(o.display_name, o.coordinates, o.alamat)
-                for o in orders
-            ]
+            # If hub is enabled: [DEPOT, HUB, customer_1, customer_2, ...]
+            # Otherwise: [DEPOT, customer_1, customer_2, ...]
+            if hub and hub_manager:
+                locations = [depot, hub] + [
+                    Location(o.display_name, o.coordinates, o.alamat)
+                    for o in orders
+                ]
+            else:
+                locations = [depot] + [
+                    Location(o.display_name, o.coordinates, o.alamat)
+                    for o in orders
+                ]
 
             # Step 2: Calculate distance matrix with cache
             status_text.text("🗺️ Menghitung distance matrix via OSRM API...")
@@ -389,13 +480,26 @@ def render_processing_section(optimization_strategy, time_limit):
             status_text.text(f"🧮 Solving VRP dengan strategi: {optimization_strategy}...")
             progress_bar.progress(50)
 
-            solver = VRPSolver(
-                orders=orders,
-                fleet=fleet,
-                depot=depot,
-                distance_matrix=distance_matrix,
-                duration_matrix=duration_matrix
-            )
+            # Use two-tier solver if hub is enabled, otherwise use standard VRP solver
+            if hub and hub_manager:
+                st.info("🎯 Using Two-Tier Hub Routing (Blind Van → HUB, Motor from DEPOT/HUB)")
+                solver = TwoTierVRPSolver(
+                    orders=orders,
+                    fleet=fleet,
+                    depot=depot,
+                    hub=hub,
+                    hub_manager=hub_manager,
+                    full_distance_matrix=distance_matrix,
+                    full_duration_matrix=duration_matrix
+                )
+            else:
+                solver = VRPSolver(
+                    orders=orders,
+                    fleet=fleet,
+                    depot=depot,
+                    distance_matrix=distance_matrix,
+                    duration_matrix=duration_matrix
+                )
 
             with st.spinner(f"Optimizing routes (max {time_limit}s)..."):
                 solution = solver.solve(
@@ -559,8 +663,10 @@ def render_results_section():
 
     try:
         depot = st.session_state.depot
+        hub = st.session_state.hub  # Get hub if enabled
         visualizer = MapVisualizer(
             depot=depot,
+            hub=hub,  # Pass hub to visualizer
             enable_road_routing=True  # Use actual road paths
         )
 
@@ -626,16 +732,21 @@ def render_results_section():
                     use_container_width=True
                 )
 
-        st.markdown("""
+        # Build map features text based on hub status
+        map_features = """
         **💡 Map Features:**
         - 🚚 Filter by courier to view individual routes
         - 🏭 Red marker = Depot
-        - ⭐ Orange markers = Priority orders
+        """
+        if st.session_state.hub:
+            map_features += "- 📦 Blue marker = Hub (consolidation point)\n"
+        map_features += """- ⭐ Orange markers = Priority orders
         - ⚫ Blue markers = Regular orders
         - Click markers for detailed info
         - Use layer control (top right) to toggle routes
         - Zoom and pan to explore
-        """)
+        """
+        st.markdown(map_features)
 
     except Exception as e:
         st.error(f"❌ Error creating map: {str(e)}")
@@ -651,13 +762,25 @@ def render_results_section():
     # Create DataFrame for display
     route_data = []
     for route in solution.routes:
+        previous_location = depot.name  # Start from DEPOT
+
         for stop in route.stops:
             if stop.order is not None:  # Skip depot
+                # Check if this is a HUB consolidation stop
+                is_hub = stop.order.sale_order_id == "HUB_CONSOLIDATION"
+
+                # Current location name
+                current_location = stop.order.display_name
+
                 route_data.append({
+                    "From": previous_location,
+                    "To": current_location,
                     "Vehicle": route.vehicle.name,
                     "Sequence": stop.sequence + 1,
+                    "Location": "📦 HUB" if is_hub else "🏠 Customer",
                     "Customer": stop.order.display_name if stop.order else "-",
                     "Address": stop.order.alamat if stop.order else "-",
+                    "City/Zone": stop.order.kota if stop.order else "-",
                     "Delivery Time": stop.order.delivery_time if stop.order else "-",
                     "Arrival": stop.arrival_time_str,
                     "Departure": stop.departure_time_str,
@@ -667,12 +790,28 @@ def render_results_section():
                     "Priority": "✅" if (stop.order and stop.order.is_priority) else ""
                 })
 
+                # Update previous location for next iteration
+                previous_location = current_location
+
     df_routes = pd.DataFrame(route_data)
 
     # Filter by vehicle
+    # Get unique vehicles from routes, with special handling for Blind Van
+    vehicle_options = []
+    for route in solution.routes:
+        vehicle_name = route.vehicle.name
+        if vehicle_name not in vehicle_options:
+            vehicle_options.append(vehicle_name)
+
+    # Sort to put Blind Van first if present
+    if "Blind Van" in vehicle_options:
+        vehicle_options.remove("Blind Van")
+        vehicle_options.insert(0, "Blind Van")
+
     selected_vehicle = st.selectbox(
-        "Filter by Vehicle",
-        options=["All"] + [route.vehicle.name for route in solution.routes]
+        "🚚 Filter by Vehicle",
+        options=["All"] + vehicle_options,
+        help="Select a vehicle to see its routes, or 'All' to see all routes"
     )
 
     if selected_vehicle != "All":
@@ -680,7 +819,65 @@ def render_results_section():
     else:
         df_display = df_routes
 
-    st.dataframe(df_display, use_container_width=True, height=400)
+    # Show warning if no routes for selected vehicle
+    if len(df_display) == 0:
+        st.warning(f"No routes found for {selected_vehicle}")
+    else:
+        st.dataframe(df_display, use_container_width=True, height=400)
+
+        # Show statistics for selected vehicle
+        if selected_vehicle != "All":
+            vehicle_route = [r for r in solution.routes if r.vehicle.name == selected_vehicle]
+            if vehicle_route:
+                route = vehicle_route[0]
+                col_stat1, col_stat2, col_stat3, col_stat4 = st.columns(4)
+                with col_stat1:
+                    st.metric("Stops", len(route.stops))
+                with col_stat2:
+                    st.metric("Distance (km)", f"{route.total_distance:.1f}")
+                with col_stat3:
+                    st.metric("Weight (kg)", f"{route.total_weight:.1f}")
+                with col_stat4:
+                    st.metric("Cost", f"Rp {route.total_cost:,.0f}")
+
+    # Note about Blind Van visibility
+    if "Blind Van" not in [r.vehicle.name for r in solution.routes]:
+        if st.session_state.hub and st.session_state.hub_config:
+            st.info(
+                "ℹ️ **Blind Van Note:** Blind Van consolidation route will appear when:\n"
+                "1. ✅ Hub is enabled (configured in settings)\n"
+                "2. ✅ There are orders from hub-zones (JAKARTA UTARA, JAKARTA BARAT, TANGERANG, BEKASI UTARA)\n"
+                "\nCurrently: No hub-zone orders found, so Blind Van is not needed."
+            )
+
+    # Add HUB routing summary if hub is enabled
+    if st.session_state.hub and st.session_state.hub_manager:
+        st.markdown("---")
+        st.subheader("🎯 Hub Routing Summary")
+
+        hub_orders_delivered = len([stop.order for route in solution.routes
+                                   for stop in route.stops
+                                   if stop.order and stop.order.kota in st.session_state.hub_config.get("zones_via_hub", [])])
+        direct_orders_delivered = solution.total_orders_delivered - hub_orders_delivered
+
+        col_hub1, col_hub2, col_hub3 = st.columns(3)
+        with col_hub1:
+            st.metric("Hub Orders Delivered", hub_orders_delivered)
+        with col_hub2:
+            st.metric("Direct Orders Delivered", direct_orders_delivered)
+        with col_hub3:
+            hub_pct = (hub_orders_delivered / solution.total_orders_delivered * 100) if solution.total_orders_delivered > 0 else 0
+            st.metric("Hub %", f"{hub_pct:.1f}%")
+
+        # Show Blind Van consolidation details
+        blind_van_routes = [r for r in solution.routes if r.vehicle.name == "Blind Van"]
+        if blind_van_routes:
+            st.info(
+                f"🚚 **Blind Van Consolidation:**\n"
+                f"• Route: DEPOT → 📦 HUB → DEPOT\n"
+                f"• {len(blind_van_routes)} consolidation route(s)\n"
+                f"• Total weight consolidated: {sum(r.total_weight for r in blind_van_routes):.1f} kg"
+            )
 
     st.markdown("---")
 
