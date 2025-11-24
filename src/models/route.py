@@ -72,12 +72,16 @@ class Route:
         total_distance: Total distance traveled in kilometers
         total_cost: Total cost of the route in Rupiah
         departure_time: Departure time from depot (minutes from midnight)
+        source: Starting location for this route ("HUB" or "DEPOT")
+        trip_number: Trip number for this vehicle (1, 2, 3, etc.)
     """
     vehicle: Vehicle
     stops: List[RouteStop] = field(default_factory=list)
     total_distance: float = 0.0
     total_cost: float = 0.0
     departure_time: int = 0  # minutes from midnight
+    source: str = "DEPOT"  # Default to DEPOT
+    trip_number: int = 1  # Default to trip 1
 
     @property
     def total_weight(self) -> float:

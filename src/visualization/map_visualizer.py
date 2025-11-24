@@ -15,6 +15,13 @@ import os
 import hashlib
 import json
 from pathlib import Path
+import logging
+import concurrent.futures
+import time
+
+# Configure logger
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 from src.models.location import Depot, Hub
 from src.models.route import RoutingSolution, Route
@@ -42,7 +49,7 @@ class MapVisualizer:
         """
         self.depot = depot
         self.hub = hub
-        self.osrm_url = "http://osrm.segarloka.cc"
+        self.osrm_url = "https://osrm.segarloka.cc"
         self.enable_road_routing = enable_road_routing
 
         # Cache directory for route geometries
@@ -217,6 +224,40 @@ class MapVisualizer:
             """)
         ).add_to(m)
 
+    def _get_road_path_with_retry(self, start_coords: Tuple[float, float], end_coords: Tuple[float, float], max_retries: int = 3) -> List[List[float]]:
+        """
+        Get road path with retry logic for transient failures
+
+        Args:
+            start_coords: (lat, lon) starting coordinates
+            end_coords: (lat, lon) ending coordinates
+            max_retries: Maximum number of retry attempts
+
+        Returns:
+            List of [lat, lon] coordinates representing the road path
+        """
+        for attempt in range(max_retries):
+            try:
+                path = self._get_road_path(start_coords, end_coords)
+                # Check if we got a real path (more than 2 points) or just a straight line fallback
+                if len(path) > 2:
+                    return path
+                elif attempt == max_retries - 1:
+                    # Last attempt, accept the fallback
+                    return path
+                else:
+                    # Straight line fallback on non-final attempt, retry
+                    logger.debug(f"Retry {attempt + 1}/{max_retries} for {start_coords} -> {end_coords}")
+                    time.sleep(0.5 * (attempt + 1))  # Exponential backoff
+            except Exception as e:
+                if attempt == max_retries - 1:
+                    logger.warning(f"All retries failed for {start_coords} -> {end_coords}: {e}")
+                    return [list(start_coords), list(end_coords)]
+                time.sleep(0.5 * (attempt + 1))
+
+        # Should not reach here, but fallback just in case
+        return [list(start_coords), list(end_coords)]
+
     def _get_road_path(self, start_coords: Tuple[float, float], end_coords: Tuple[float, float]) -> List[List[float]]:
         """
         Get actual road path between two coordinates using OSRM Route API
@@ -243,6 +284,7 @@ class MapVisualizer:
             try:
                 with open(cache_file, 'r') as f:
                     cached_data = json.load(f)
+                    logger.debug(f"Cache hit for path {start_coords} -> {end_coords}")
                     return cached_data['path']
             except:
                 pass  # Cache read failed, fetch from API
@@ -257,7 +299,7 @@ class MapVisualizer:
                 "geometries": "polyline"
             }
 
-            response = requests.get(url, params=params, timeout=10)
+            response = requests.get(url, params=params, timeout=30)  # Increased timeout to 30s
 
             if response.status_code == 200:
                 data = response.json()
@@ -270,17 +312,26 @@ class MapVisualizer:
                     try:
                         with open(cache_file, 'w') as f:
                             json.dump({"path": path}, f)
-                    except Exception:
-                        pass  # Cache write failed, not critical
+                        logger.debug(f"Cached road path: {start_coords} -> {end_coords}")
+                    except Exception as e:
+                        logger.warning(f"Failed to cache path: {e}")
 
                     return path
+                else:
+                    # OSRM returned error response
+                    logger.warning(f"OSRM API error: {data.get('code', 'Unknown')} - {data.get('message', 'No message')} for {start_coords} -> {end_coords}")
+            else:
+                logger.warning(f"OSRM API HTTP error {response.status_code} for {start_coords} -> {end_coords}")
 
-        except requests.exceptions.RequestException:
-            pass  # Network error - silently fall back
-        except Exception:
-            pass  # Any other error - silently fall back
+        except requests.exceptions.Timeout as e:
+            logger.debug(f"OSRM API timeout for {start_coords} -> {end_coords}: {e}")
+        except requests.exceptions.RequestException as e:
+            logger.debug(f"OSRM API request error for {start_coords} -> {end_coords}: {e}")
+        except Exception as e:
+            logger.debug(f"Unexpected error fetching road path for {start_coords} -> {end_coords}: {e}")
 
         # Fallback to straight line (always works)
+        logger.debug(f"Using straight line fallback for {start_coords} -> {end_coords}")
         return [list(start_coords), list(end_coords)]
 
     def _add_route(self, m: folium.Map, route: Route, color: str, route_number: int):
@@ -321,13 +372,51 @@ class MapVisualizer:
 
         # Draw route lines using actual road paths
         all_road_coords = []
+        
+        # Prepare tasks for parallel execution
+        tasks = []
         for i in range(len(waypoints) - 1):
             start_coords = tuple(waypoints[i])
             end_coords = tuple(waypoints[i + 1])
+            tasks.append((start_coords, end_coords))
 
-            # Get actual road path between consecutive waypoints
-            road_path = self._get_road_path(start_coords, end_coords)
-            all_road_coords.extend(road_path)
+        # Execute in parallel with retry logic
+        start_time = time.time()
+        # Use ThreadPoolExecutor to fetch segments in parallel
+        # Reduced workers to 5 to avoid overwhelming the API
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            # Submit all tasks
+            future_to_index = {
+                executor.submit(self._get_road_path_with_retry, start, end): i
+                for i, (start, end) in enumerate(tasks)
+            }
+
+            # Collect results in order
+            results = [None] * len(tasks)
+            for future in concurrent.futures.as_completed(future_to_index):
+                index = future_to_index[future]
+                try:
+                    results[index] = future.result()
+                except Exception as e:
+                    logger.error(f"Error fetching road path segment {index} after retries: {e}")
+                    # Fallback to straight line
+                    results[index] = [list(tasks[index][0]), list(tasks[index][1])]
+
+        # Combine results and count successful vs fallback paths
+        successful_paths = 0
+        fallback_paths = 0
+        for path in results:
+            if path:
+                all_road_coords.extend(path)
+                # Paths with >2 points are actual road paths, =2 points are straight line fallbacks
+                if len(path) > 2:
+                    successful_paths += 1
+                else:
+                    fallback_paths += 1
+
+        elapsed = time.time() - start_time
+        logger.info(f"Route {route_number} path generation took {elapsed:.2f}s for {len(tasks)} segments "
+                   f"(✅ {successful_paths} road paths, ⚠️ {fallback_paths} straight lines)")
 
         # Draw the complete route with road following
         if all_road_coords:

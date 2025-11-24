@@ -36,6 +36,7 @@ class VRPSolver:
         depot: Depot,
         distance_matrix: np.ndarray,
         duration_matrix: np.ndarray,
+        vehicle_id_offset: int = 0,
     ):
         """
         Initialize VRP solver.
@@ -46,6 +47,7 @@ class VRPSolver:
             depot: Depot location
             distance_matrix: Distance matrix in kilometers
             duration_matrix: Duration matrix in minutes
+            vehicle_id_offset: Starting vehicle ID offset (for multi-tier routing)
         """
         self.orders = orders
         self.fleet = fleet
@@ -71,8 +73,8 @@ class VRPSolver:
                 f"number of locations {n_locations}"
             )
 
-        # Get all vehicles from fleet
-        self.vehicles = fleet.get_all_vehicles()
+        # Get all vehicles from fleet with offset
+        self.vehicles = fleet.get_all_vehicles(start_id=vehicle_id_offset)
 
         # Create a list of unique cities and a mapping from location to city index
         self.cities = sorted(list(set(o.kota for o in orders if o.kota)))

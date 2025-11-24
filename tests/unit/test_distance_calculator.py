@@ -37,7 +37,7 @@ class TestDistanceCalculator:
     def test_calculator_initialization(self):
         """Test distance calculator initialization."""
         calc = DistanceCalculator()
-        assert calc.osrm_url == "http://osrm.segarloka.cc"
+        assert calc.osrm_url == "https://osrm.segarloka.cc"
         assert calc.cache_dir == ".cache"
 
     @patch('src.utils.distance_calculator.requests.get')

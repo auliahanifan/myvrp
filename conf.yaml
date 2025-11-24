@@ -32,10 +32,29 @@ vehicles:
 routing:
   return_to_depot: true # Set to false if vehicles can end anywhere
   priority_time_tolerance: 0 # Priority orders must be within time window (in minutes)
-  non_priority_time_tolerance: 20 # Non-priority can be late up to 20 minutes
+  non_priority_time_tolerance: 60 # Non-priority can be late up to 60 minutes (1 hour)
   multiple_trips: true # Allow vehicles to do multiple trips per day
   relax_time_windows: false # if true, solver will relax time window constraint
   time_window_relaxation_minutes: 15 # minutes to relax time window
+
+# Solver Constraints (for debugging and flexibility)
+constraints:
+  enforce_time_windows: true # Toggle time window constraints on/off
+  enforce_capacity: true # Toggle vehicle capacity constraints on/off
+  enforce_city_limit: true # Toggle 2-city-per-vehicle limit on/off
+  allow_dropped_orders: true # Allow orders to be unassigned if constraints too tight
+
+# Penalty values for constraint violations
+penalties:
+  dropped_order: 1000000 # High penalty for unassigned orders (default: 1000000)
+  time_violation_per_minute: 100 # Penalty per minute if time windows are soft (default: 100)
+
+# Debug mode configuration
+debug:
+  enabled: false # Enable debug logging and file outputs
+  log_level: "INFO" # Log level: DEBUG, INFO, WARNING, ERROR
+  save_distance_matrix: false # Save distance matrix to CSV for inspection
+  save_solver_params: false # Save solver parameters to file
 
 # Hub configuration for two-tier delivery routing
 hub:

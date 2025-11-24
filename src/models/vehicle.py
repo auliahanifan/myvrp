@@ -84,16 +84,19 @@ class VehicleFleet:
         if not self.vehicle_types:
             raise ValueError("Fleet must have at least one vehicle type")
 
-    def get_all_vehicles(self) -> list[Vehicle]:
+    def get_all_vehicles(self, start_id: int = 0) -> list[Vehicle]:
         """
         Get all vehicle instances based on configuration.
         Ordered by priority (highest cost first to minimize vehicle count).
+
+        Args:
+            start_id: Starting vehicle ID (used for continuing numbering across tiers)
 
         Returns:
             List of Vehicle instances
         """
         vehicles = []
-        vehicle_id = 0
+        vehicle_id = start_id
 
         for vehicle_type, count, unlimited in self.vehicle_types:
             for i in range(count):

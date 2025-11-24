@@ -41,7 +41,7 @@ class DistanceCalculator:
             enable_cache: Enable/disable caching (default: True)
             fallback_speed_kmh: Assumed speed for duration estimation with Haversine (default: 40 km/h)
         """
-        self.osrm_url = "http://osrm.segarloka.cc"
+        self.osrm_url = "https://osrm.segarloka.cc"
         self.cache_dir = cache_dir
         self.cache_ttl_hours = cache_ttl_hours
         self.enable_cache = enable_cache

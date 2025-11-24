@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 import tempfile
 import io
 from streamlit_folium import st_folium
+import streamlit.components.v1 as components
 
 # Load environment variables
 load_dotenv()
@@ -26,9 +27,9 @@ from src.utils.csv_parser import CSVParser
 from src.utils.yaml_parser import YAMLParser
 from src.utils.distance_calculator import DistanceCalculator
 from src.utils.hub_routing import HubRoutingManager
-from src.solver.vrp_solver import VRPSolver
 from src.solver.two_tier_vrp_solver import TwoTierVRPSolver
 from src.output.excel_generator import ExcelGenerator
+from src.output.csv_generator import CSVGenerator
 from src.visualization.map_visualizer import MapVisualizer
 
 
@@ -96,6 +97,10 @@ def initialize_session_state():
         st.session_state.solution = None
     if 'excel_path' not in st.session_state:
         st.session_state.excel_path = None
+    if 'csv_path' not in st.session_state:
+        st.session_state.csv_path = None
+    if 'csv_summary_path' not in st.session_state:
+        st.session_state.csv_summary_path = None
     if 'depot' not in st.session_state:
         st.session_state.depot = None
     if 'hub' not in st.session_state:
@@ -104,6 +109,8 @@ def initialize_session_state():
         st.session_state.hub_config = None
     if 'hub_manager' not in st.session_state:
         st.session_state.hub_manager = None
+    if 'map_html_cache' not in st.session_state:
+        st.session_state.map_html_cache = {}  # Cache map HTML by route filter
 
 
 def get_depot_from_env():
@@ -182,7 +189,7 @@ def render_upload_section():
                 # Preview data
                 st.subheader("Preview Data (10 rows pertama)")
                 df = pd.read_csv(io.StringIO(csv_file.getvalue().decode('utf-8')))
-                st.dataframe(df.head(10), use_container_width=True)
+                st.dataframe(df.head(10), width=1000)
 
                 # Show statistics
                 total_weight = sum(o.load_weight_in_kg for o in orders)
@@ -363,7 +370,7 @@ def render_configuration_section():
             )
         else:
             st.markdown(
-                '<div class="info-box">ℹ️ Hub routing not enabled. Single-tier routing active.</div>',
+                '<div class="error-box">❌ Hub routing not configured. Please add hub configuration to conf.yaml</div>',
                 unsafe_allow_html=True
             )
 
@@ -386,7 +393,7 @@ def render_processing_section(optimization_strategy, time_limit):
         return
 
     # Generate button
-    if st.button("🚀 Generate Routing Optimal", type="primary", use_container_width=True):
+    if st.button("🚀 Generate Routing Optimal", type="primary", width="stretch"):
         try:
             # Progress tracking
             progress_bar = st.progress(0)
@@ -476,30 +483,25 @@ def render_processing_section(optimization_strategy, time_limit):
 
             progress_bar.progress(40)
 
-            # Step 3: Solve VRP
-            status_text.text(f"🧮 Solving VRP dengan strategi: {optimization_strategy}...")
+            # Step 3: Solve VRP using Two-Tier Routing
+            status_text.text(f"🧮 Solving 2E-VRPTW dengan strategi: {optimization_strategy}...")
             progress_bar.progress(50)
 
-            # Use two-tier solver if hub is enabled, otherwise use standard VRP solver
-            if hub and hub_manager:
-                st.info("🎯 Using Two-Tier Hub Routing (Blind Van → HUB, Motor from DEPOT/HUB)")
-                solver = TwoTierVRPSolver(
-                    orders=orders,
-                    fleet=fleet,
-                    depot=depot,
-                    hub=hub,
-                    hub_manager=hub_manager,
-                    full_distance_matrix=distance_matrix,
-                    full_duration_matrix=duration_matrix
-                )
-            else:
-                solver = VRPSolver(
-                    orders=orders,
-                    fleet=fleet,
-                    depot=depot,
-                    distance_matrix=distance_matrix,
-                    duration_matrix=duration_matrix
-                )
+            # Always use two-tier solver
+            if not hub or not hub_manager:
+                st.error("❌ Hub configuration required. Please check conf.yaml hub settings.")
+                return
+
+            st.info("🎯 Using Two-Tier Hub Routing (Tier 1: Blind Van → HUB, Tier 2: Motors from DEPOT/HUB)")
+            solver = TwoTierVRPSolver(
+                orders=orders,
+                fleet=fleet,
+                depot=depot,
+                hub=hub,
+                hub_manager=hub_manager,
+                full_distance_matrix=distance_matrix,
+                full_duration_matrix=duration_matrix
+            )
 
             with st.spinner(f"Optimizing routes (max {time_limit}s)..."):
                 solution = solver.solve(
@@ -509,34 +511,55 @@ def render_processing_section(optimization_strategy, time_limit):
 
             st.session_state.solution = solution
 
+            # Clear map HTML cache for new solution
+            st.session_state.map_html_cache = {}
+
             status_text.text(f"✅ Solusi ditemukan! {len(solution.routes)} routes generated")
             progress_bar.progress(70)
 
-            # Step 4: Generate Excel
-            status_text.text("📊 Generating Excel output...")
+            # Step 4: Generate Excel and CSV
+            status_text.text("📊 Generating Excel and CSV outputs...")
             progress_bar.progress(80)
-
-            generator = ExcelGenerator(depot=depot)
 
             # Ensure results directory exists
             results_dir = Path("results")
             results_dir.mkdir(exist_ok=True)
 
-            excel_path = generator.generate(
+            # Generate Excel
+            excel_generator = ExcelGenerator(depot=depot)
+            excel_path = excel_generator.generate(
                 solution=solution,
                 output_dir=str(results_dir)
             )
-
             st.session_state.excel_path = excel_path
 
-            status_text.text("✅ Excel file berhasil dibuat!")
+            # Generate CSV with same timestamp
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            csv_generator = CSVGenerator(depot=depot)
+            csv_path = csv_generator.generate(
+                solution=solution,
+                output_dir=str(results_dir),
+                filename=f"routing_result_{timestamp}"
+            )
+            st.session_state.csv_path = csv_path
+
+            # Generate CSV summary
+            csv_summary_path = csv_generator.generate_summary_csv(
+                solution=solution,
+                output_dir=str(results_dir),
+                filename=f"routing_summary_{timestamp}"
+            )
+            st.session_state.csv_summary_path = csv_summary_path
+
+            status_text.text("✅ Excel and CSV files berhasil dibuat!")
             progress_bar.progress(100)
 
             # Show success message
             st.markdown(
                 '<div class="success-box">'
                 f'<strong>✅ Routing berhasil di-generate!</strong><br>'
-                f'📁 File: {Path(excel_path).name}<br>'
+                f'📁 Excel: {Path(excel_path).name}<br>'
+                f'📁 CSV: {Path(csv_path).name}<br>'
                 f'⏱️ Computation time: {solution.computation_time:.2f} detik'
                 '</div>',
                 unsafe_allow_html=True
@@ -616,7 +639,7 @@ def render_results_section():
             })
         
         df_unassigned = pd.DataFrame(unassigned_data)
-        st.dataframe(df_unassigned, use_container_width=True)
+        st.dataframe(df_unassigned, width=1000)
 
     st.markdown("---")
 
@@ -664,45 +687,60 @@ def render_results_section():
     try:
         depot = st.session_state.depot
         hub = st.session_state.hub  # Get hub if enabled
-        visualizer = MapVisualizer(
-            depot=depot,
-            hub=hub,  # Pass hub to visualizer
-            enable_road_routing=True  # Use actual road paths
-        )
 
-        # Show routing mode status and create map
-        if visualizer.enable_road_routing:
-            with st.spinner("🛣️ Generating map with actual road paths (may take a few seconds)..."):
+        # Create cache key based on selected route
+        cache_key = f"route_{selected_route_idx}" if selected_route_idx is not None else "all_routes"
+
+        # Check if map HTML is already cached
+        if cache_key in st.session_state.map_html_cache:
+            # Use cached HTML (instant display, no regeneration)
+            map_html = st.session_state.map_html_cache[cache_key]
+            st.success("✅ Map loaded from cache (instant)")
+            components.html(map_html, height=600, scrolling=True)
+        else:
+            # Generate map (first time for this filter)
+            visualizer = MapVisualizer(
+                depot=depot,
+                hub=hub,  # Pass hub to visualizer
+                enable_road_routing=True  # Use actual road paths
+            )
+
+            if visualizer.enable_road_routing:
+                with st.spinner("🛣️ Generating map with actual road paths (this will be cached)..."):
+                    if selected_route_idx is not None:
+                        # Single route view
+                        route_map = visualizer.create_single_route_map(
+                            solution,
+                            selected_route_idx,
+                            zoom_start=12
+                        )
+                    else:
+                        # All routes view
+                        route_map = visualizer.create_map(solution, zoom_start=12)
+                st.success("✅ Map generated and cached for instant future access!")
+            else:
+                # No spinner needed for straight lines
                 if selected_route_idx is not None:
-                    # Single route view
                     route_map = visualizer.create_single_route_map(
                         solution,
                         selected_route_idx,
                         zoom_start=12
                     )
                 else:
-                    # All routes view
                     route_map = visualizer.create_map(solution, zoom_start=12)
-            st.success("✅ Map generated with actual road paths!")
-        else:
-            # No spinner needed for straight lines
-            if selected_route_idx is not None:
-                route_map = visualizer.create_single_route_map(
-                    solution,
-                    selected_route_idx,
-                    zoom_start=12
-                )
-            else:
-                route_map = visualizer.create_map(solution, zoom_start=12)
-            st.warning("⚠️ Using straight-line paths (OSRM URL not configured for road routing)")
+                st.warning("⚠️ Using straight-line paths (OSRM URL not configured for road routing)")
 
-        # Display map
-        st_folium(route_map, width=1400, height=600)
+            # Save map as HTML and cache it
+            map_html = route_map._repr_html_()
+            st.session_state.map_html_cache[cache_key] = map_html
+
+            # Display the map
+            components.html(map_html, height=600, scrolling=True)
 
         # Option to download map as HTML
         col_map1, col_map2 = st.columns([3, 1])
         with col_map2:
-            if st.button("💾 Save Map as HTML", use_container_width=True):
+            if st.button("💾 Save Map as HTML", width="stretch"):
                 results_dir = Path("results")
                 results_dir.mkdir(exist_ok=True)
 
@@ -713,23 +751,31 @@ def render_results_section():
                     map_filename = f"route_map_all_{timestamp}.html"
                 map_path = results_dir / map_filename
 
-                if selected_route_idx is not None:
-                    visualizer.save_single_route_map(solution, selected_route_idx, str(map_path))
+                # Use cached HTML if available, otherwise generate
+                if cache_key in st.session_state.map_html_cache:
+                    map_html_content = st.session_state.map_html_cache[cache_key]
+                    with open(map_path, 'w', encoding='utf-8') as f:
+                        f.write(map_html_content)
                 else:
-                    visualizer.save_map(solution, str(map_path))
+                    # Fallback: generate map if not cached (shouldn't happen)
+                    visualizer = MapVisualizer(depot=depot, hub=hub, enable_road_routing=True)
+                    if selected_route_idx is not None:
+                        visualizer.save_single_route_map(solution, selected_route_idx, str(map_path))
+                    else:
+                        visualizer.save_map(solution, str(map_path))
+
+                    with open(map_path, 'r', encoding='utf-8') as f:
+                        map_html_content = f.read()
 
                 st.success(f"✅ Map saved: {map_filename}")
 
                 # Download button
-                with open(map_path, 'r', encoding='utf-8') as f:
-                    html_content = f.read()
-
                 st.download_button(
                     label="📥 Download Map HTML",
-                    data=html_content,
+                    data=map_html_content,
                     file_name=map_filename,
                     mime="text/html",
-                    use_container_width=True
+                    width="stretch"
                 )
 
         # Build map features text based on hub status
@@ -762,7 +808,11 @@ def render_results_section():
     # Create DataFrame for display
     route_data = []
     for route in solution.routes:
-        previous_location = depot.name  # Start from DEPOT
+        # Set starting location based on route source
+        if route.source == "HUB" and st.session_state.hub:
+            previous_location = st.session_state.hub.name
+        else:
+            previous_location = depot.name
 
         for stop in route.stops:
             if stop.order is not None:  # Skip depot
@@ -773,6 +823,8 @@ def render_results_section():
                 current_location = stop.order.display_name
 
                 route_data.append({
+                    "Source": route.source,
+                    "Trip #": route.trip_number,
                     "From": previous_location,
                     "To": current_location,
                     "Vehicle": route.vehicle.name,
@@ -823,7 +875,7 @@ def render_results_section():
     if len(df_display) == 0:
         st.warning(f"No routes found for {selected_vehicle}")
     else:
-        st.dataframe(df_display, use_container_width=True, height=400)
+        st.dataframe(df_display, width="stretch", height=400)
 
         # Show statistics for selected vehicle
         if selected_vehicle != "All":
@@ -881,28 +933,65 @@ def render_results_section():
 
     st.markdown("---")
 
+    # Download section
+    st.subheader("Download Reports")
+
+    col_dl1, col_dl2, col_dl3 = st.columns(3)
+
     # Download Excel
-    st.subheader("Download Excel Report")
+    with col_dl1:
+        st.write("**Excel Report**")
+        if st.session_state.excel_path and os.path.exists(st.session_state.excel_path):
+            with open(st.session_state.excel_path, 'rb') as f:
+                excel_bytes = f.read()
 
-    if st.session_state.excel_path and os.path.exists(st.session_state.excel_path):
-        with open(st.session_state.excel_path, 'rb') as f:
-            excel_bytes = f.read()
+            st.download_button(
+                label="📥 Download Excel",
+                data=excel_bytes,
+                file_name=Path(st.session_state.excel_path).name,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary",
+                width="stretch"
+            )
 
-        st.download_button(
-            label="📥 Download Excel Report",
-            data=excel_bytes,
-            file_name=Path(st.session_state.excel_path).name,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            type="primary",
-            use_container_width=True
-        )
+    # Download CSV Routes
+    with col_dl2:
+        st.write("**CSV Routes**")
+        if 'csv_path' in st.session_state and st.session_state.csv_path and os.path.exists(st.session_state.csv_path):
+            with open(st.session_state.csv_path, 'rb') as f:
+                csv_bytes = f.read()
 
-        st.markdown(
-            f'<div class="info-box">'
-            f'📁 File tersimpan di: <code>{st.session_state.excel_path}</code>'
-            '</div>',
-            unsafe_allow_html=True
-        )
+            st.download_button(
+                label="📥 Download CSV",
+                data=csv_bytes,
+                file_name=Path(st.session_state.csv_path).name,
+                mime="text/csv",
+                type="primary",
+                width="stretch"
+            )
+
+    # Download CSV Summary
+    with col_dl3:
+        st.write("**CSV Summary**")
+        if 'csv_summary_path' in st.session_state and st.session_state.csv_summary_path and os.path.exists(st.session_state.csv_summary_path):
+            with open(st.session_state.csv_summary_path, 'rb') as f:
+                csv_summary_bytes = f.read()
+
+            st.download_button(
+                label="📥 Download Summary",
+                data=csv_summary_bytes,
+                file_name=Path(st.session_state.csv_summary_path).name,
+                mime="text/csv",
+                type="primary",
+                width="stretch"
+            )
+
+    st.markdown(
+        f'<div class="info-box">'
+        f'📁 Files saved to results directory'
+        '</div>',
+        unsafe_allow_html=True
+    )
 
 
 def render_historical_results():
@@ -939,7 +1028,7 @@ def render_historical_results():
     df_historical = pd.DataFrame(historical_data)
 
     # Display table
-    st.dataframe(df_historical[["Filename", "Created", "Size"]], use_container_width=True)
+    st.dataframe(df_historical[["Filename", "Created", "Size"]], width="stretch")
 
     # Download section
     st.subheader("Download Historical Result")
@@ -961,13 +1050,50 @@ def render_historical_results():
                 data=excel_bytes,
                 file_name=selected_file,
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
+                width="stretch"
             )
 
 
 def render_sidebar():
     """Render the sidebar with additional info"""
     with st.sidebar:
+        st.header("⚙️ Configuration")
+
+        # Time tolerance configuration
+        with st.expander("⏱️ Time Tolerance", expanded=False):
+            st.write("Configure delivery time window tolerances:")
+            priority_tolerance = st.number_input(
+                "Priority orders tolerance (min)",
+                min_value=0,
+                max_value=120,
+                value=0,
+                step=5,
+                help="Minutes of tolerance for priority orders (0 = strict)"
+            )
+            non_priority_tolerance = st.number_input(
+                "Non-priority orders tolerance (min)",
+                min_value=0,
+                max_value=180,
+                value=60,
+                step=15,
+                help="Minutes of tolerance for non-priority orders"
+            )
+            st.session_state.priority_tolerance = priority_tolerance
+            st.session_state.non_priority_tolerance = non_priority_tolerance
+
+        # Debug mode configuration
+        with st.expander("🐛 Debug Mode", expanded=False):
+            debug_enabled = st.checkbox("Enable debug logging", value=False)
+            if debug_enabled:
+                save_distance_matrix = st.checkbox("Save distance matrix to CSV", value=False)
+                st.session_state.debug_mode = True
+                st.session_state.save_distance_matrix = save_distance_matrix
+            else:
+                st.session_state.debug_mode = False
+                st.session_state.save_distance_matrix = False
+
+        st.markdown("---")
+
         st.header("ℹ️ About")
 
         st.markdown("""
@@ -996,7 +1122,7 @@ def render_sidebar():
         st.header("🔧 System Status")
 
         # Check OSRM API
-        osrm_url = os.getenv("OSRM_URL", "http://osrm.segarloka.cc")
+        osrm_url = os.getenv("OSRM_URL", "https://osrm.segarloka.cc")
         if osrm_url:
             st.success(f"✅ OSRM API at {osrm_url}")
         else:

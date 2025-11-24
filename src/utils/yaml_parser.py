@@ -143,6 +143,58 @@ class YAMLParser:
         except ValueError as e:
             raise YAMLParserError(f"Error parsing hub configuration: {str(e)}")
 
+    def get_constraints_config(self) -> Dict:
+        """
+        Parse solver constraints configuration from YAML.
+
+        Returns:
+            Dictionary with constraints configuration
+        """
+        if self.data is None:
+            return {}
+
+        constraints_config = self.data.get("constraints", {})
+        return {
+            "enforce_time_windows": constraints_config.get("enforce_time_windows", True),
+            "enforce_capacity": constraints_config.get("enforce_capacity", True),
+            "enforce_city_limit": constraints_config.get("enforce_city_limit", True),
+            "allow_dropped_orders": constraints_config.get("allow_dropped_orders", True),
+        }
+
+    def get_penalties_config(self) -> Dict:
+        """
+        Parse penalty values configuration from YAML.
+
+        Returns:
+            Dictionary with penalty values
+        """
+        if self.data is None:
+            return {}
+
+        penalties_config = self.data.get("penalties", {})
+        return {
+            "dropped_order": penalties_config.get("dropped_order", 1000000),
+            "time_violation_per_minute": penalties_config.get("time_violation_per_minute", 100),
+        }
+
+    def get_debug_config(self) -> Dict:
+        """
+        Parse debug configuration from YAML.
+
+        Returns:
+            Dictionary with debug configuration
+        """
+        if self.data is None:
+            return {}
+
+        debug_config = self.data.get("debug", {})
+        return {
+            "enabled": debug_config.get("enabled", False),
+            "log_level": debug_config.get("log_level", "INFO"),
+            "save_distance_matrix": debug_config.get("save_distance_matrix", False),
+            "save_solver_params": debug_config.get("save_solver_params", False),
+        }
+
     def _parse_vehicles(self) -> List[tuple[Vehicle, int, bool]]:
         """
         Parse vehicles list from YAML data.

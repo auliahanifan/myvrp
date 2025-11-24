@@ -102,6 +102,8 @@ class ExcelGenerator:
 
         # Define column headers
         headers = [
+            "Source",
+            "Trip #",
             "Vehicle Name",
             "Delivery Time",
             "Customer",
@@ -130,7 +132,7 @@ class ExcelGenerator:
             cell.border = self._get_border()
 
         # Set column widths
-        column_widths = [18, 14, 25, 35, 12, 12, 13, 13, 12, 18, 10, 12, 12, 20]
+        column_widths = [10, 8, 18, 14, 25, 35, 12, 12, 13, 13, 12, 18, 10, 12, 12, 20]
         for col_num, width in enumerate(column_widths, start=1):
             ws.column_dimensions[get_column_letter(col_num)].width = width
 
@@ -176,20 +178,22 @@ class ExcelGenerator:
 
         # Column values
         values = [
-            route.vehicle.name,  # A: Vehicle Name
-            order.delivery_time,  # B: Delivery Time
-            order.display_name,  # C: Customer
-            order.alamat,  # D: Address
-            route.vehicle.cost_per_km,  # E: Rate
-            order.load_weight_in_kg,  # F: Weight
-            stop.arrival_time_str,  # G: Arrival Time
-            stop.departure_time_str,  # H: Departure Time
-            stop.distance_from_prev,  # I: Distance
-            stop.cumulative_weight,  # J: Cumulative Weight
-            stop.sequence,  # K: Sequence
-            order.coordinates[0],  # L: Latitude
-            order.coordinates[1],  # M: Longitude
-            "PRIORITY" if order.is_priority else ""  # N: Notes
+            route.source,  # A: Source (HUB or DEPOT)
+            route.trip_number,  # B: Trip #
+            route.vehicle.name,  # C: Vehicle Name
+            order.delivery_time,  # D: Delivery Time
+            order.display_name,  # E: Customer
+            order.alamat,  # F: Address
+            route.vehicle.cost_per_km,  # G: Rate
+            order.load_weight_in_kg,  # H: Weight
+            stop.arrival_time_str,  # I: Arrival Time
+            stop.departure_time_str,  # J: Departure Time
+            stop.distance_from_prev,  # K: Distance
+            stop.cumulative_weight,  # L: Cumulative Weight
+            stop.sequence,  # M: Sequence
+            order.coordinates[0],  # N: Latitude
+            order.coordinates[1],  # O: Longitude
+            "PRIORITY" if order.is_priority else ""  # P: Notes
         ]
 
         # Write values
