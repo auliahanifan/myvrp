@@ -14,4 +14,4 @@ echo "🚀 Running Docker container..."
 echo ""
 
 # Run Docker container with environment variables
-docker run -p 8501:8501 --env-file .env seg-vrp
+docker run -d -p 8501:8501 --env-file .env seg-vrp
