@@ -9,7 +9,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
-    && curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_CONFIRM=1 UV_INSTALL_DIR=/usr/local/bin sh
+    && curl -LsSf https://astral.sh/uv/install.sh | sh
+
 
 WORKDIR /app
 
