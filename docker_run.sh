@@ -13,7 +13,17 @@ echo "🐳 Building Docker image..."
 docker build -t "${IMAGE_NAME}" .
 echo ""
 
-echo "🧹 Removing existing container (if any)..."
+echo "🔍 Checking for containers using host port ${HOST_PORT}..."
+PORT_CONTAINERS=$(docker ps --filter "publish=${HOST_PORT}" -q)
+if [ -n "${PORT_CONTAINERS}" ]; then
+  echo "🛑 Stopping containers on port ${HOST_PORT}: ${PORT_CONTAINERS}"
+  docker stop ${PORT_CONTAINERS} >/dev/null
+  echo "🧹 Removing containers on port ${HOST_PORT}: ${PORT_CONTAINERS}"
+  docker rm ${PORT_CONTAINERS} >/dev/null
+fi
+echo ""
+
+echo "🧹 Removing existing container named ${CONTAINER_NAME} (if any)..."
 if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
   docker rm -f "${CONTAINER_NAME}" >/dev/null
 fi

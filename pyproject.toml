@@ -14,6 +14,7 @@ dependencies = [
     "streamlit>=1.29.0",
     "streamlit-folium>=0.24.0",
     "folium>=0.19.4",
+    "polyline>=2.0.0",
     "python-dotenv>=1.0.0",
 ]
 

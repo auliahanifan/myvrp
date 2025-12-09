@@ -1117,6 +1117,15 @@ wheels = [
 ]
 
 [[package]]
+name = "polyline"
+version = "2.0.4"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/2c/c1/1a6ee4f9f02a55b2a9241bbadd342970160f7e42423307f21ee8f5530d4e/polyline-2.0.4.tar.gz", hash = "sha256:f05ade694522bf1720febebe1672f820f43a13c6a1664751e7769d47e8ca9b1b", size = 8261, upload-time = "2025-12-02T17:55:22.735Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/34/a8/4ebd3cb31d380e018efb1c8bf92664b196a41aba19506015b682af2587b9/polyline-2.0.4-py3-none-any.whl", hash = "sha256:a4e0c15b8ecb32915559f8cf210f1f8c2f5cc53d3cd32c91d7c1668d6e936e10", size = 7167, upload-time = "2025-12-02T17:55:20.323Z" },
+]
+
+[[package]]
 name = "protobuf"
 version = "6.31.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1580,6 +1589,7 @@ dependencies = [
     { name = "openpyxl" },
     { name = "ortools" },
     { name = "pandas" },
+    { name = "polyline" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
     { name = "streamlit" },
@@ -1603,6 +1613,7 @@ requires-dist = [
     { name = "openpyxl", specifier = ">=3.1.2" },
     { name = "ortools", specifier = ">=9.8.3296" },
     { name = "pandas", specifier = ">=2.1.4" },
+    { name = "polyline", specifier = ">=2.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.4.3" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.1.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
