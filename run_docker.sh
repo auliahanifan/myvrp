@@ -1,17 +1,21 @@
 #!/bin/bash
-# Script to build and run the Docker container
-# Usage: ./run_docker.sh
+set -euo pipefail
+
+IMAGE_NAME="seg-vrp"
+PORT="8501"
 
 echo "🐳 Building Docker image..."
+docker build -t "${IMAGE_NAME}" .
 echo ""
 
-# Build Docker image
-docker build -t seg-vrp .
-echo ""
-
-# Run Docker container
 echo "🚀 Running Docker container..."
-echo ""
 
-# Run Docker container with environment variables
-docker run -p 8501:8501 --env-file .env seg-vrp
+# Prefer .env, fall back to .env.example if present
+ENV_FILE_ARGS=()
+if [ -f .env ]; then
+  ENV_FILE_ARGS+=(--env-file .env)
+elif [ -f .env.example ]; then
+  ENV_FILE_ARGS+=(--env-file .env.example)
+fi
+
+docker run -p "${PORT}:${PORT}" "${ENV_FILE_ARGS[@]}" "${IMAGE_NAME}"
