@@ -11,6 +11,9 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && curl -LsSf https://astral.sh/uv/install.sh | sh
 
+# Ensure uv is on PATH (installer places it in ~/.local/bin)
+ENV PATH="/root/.local/bin:${PATH}"
+
 
 WORKDIR /app
 
