@@ -1,5 +1,5 @@
 #!/bin/bash
-set -euo pipefail
+set -eu pipefail
 
 # Script to build and run the Docker container
 # Usage: PORT=8502 ./docker_run.sh
