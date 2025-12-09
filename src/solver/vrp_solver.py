@@ -37,6 +37,7 @@ class VRPSolver:
         distance_matrix: np.ndarray,
         duration_matrix: np.ndarray,
         vehicle_id_offset: int = 0,
+        config: dict = None,
     ):
         """
         Initialize VRP solver.
@@ -48,12 +49,14 @@ class VRPSolver:
             distance_matrix: Distance matrix in kilometers
             duration_matrix: Duration matrix in minutes
             vehicle_id_offset: Starting vehicle ID offset (for multi-tier routing)
+            config: Configuration dictionary (for logging and other settings)
         """
         self.orders = orders
         self.fleet = fleet
         self.depot = depot
         self.distance_matrix = distance_matrix
         self.duration_matrix = duration_matrix
+        self.config = config or {}
 
         # Create locations list: depot + customer locations
         self.locations = [depot] + [
@@ -171,6 +174,9 @@ class VRPSolver:
                 f"Try: Increase time_limit, relax time windows, or check input data."
             )
 
+        # Print performance statistics
+        self._print_performance_stats(optimization_strategy)
+
         # Extract solution
         computation_time = time_module.time() - start_time
         routing_solution = self._extract_solution(
@@ -254,7 +260,7 @@ class VRPSolver:
             self.time_callback_index,
             60,  # allow waiting time up to 60 minutes
             1440,  # maximum time per vehicle (24 hours in minutes)
-            False,  # don't force start cumul to zero
+            False,  # don't force start cumul to zero (allows flexible departure times)
             "Time",
         )
 
@@ -289,10 +295,11 @@ class VRPSolver:
         depot_index = self.manager.NodeToIndex(0)
         time_dimension.CumulVar(depot_index).SetRange(0, 1440)
 
-        # Minimize the time of the routes
+        # Minimize the END time of routes (more effective than start time)
+        # This ensures routes complete as early as possible
         for i in range(self.routing.vehicles()):
             self.routing.AddVariableMinimizedByFinalizer(
-                time_dimension.CumulVar(self.routing.Start(i))
+                time_dimension.CumulVar(self.routing.End(i))
             )
 
     def _add_city_constraint(self):
@@ -339,7 +346,7 @@ class VRPSolver:
         self, optimization_strategy: str, time_limit: int
     ) -> pywrapcp.DefaultRoutingSearchParameters:
         """
-        Get search parameters for OR-Tools.
+        Get search parameters for OR-Tools with optimized configuration.
 
         Args:
             optimization_strategy: Optimization strategy
@@ -350,8 +357,11 @@ class VRPSolver:
         """
         search_parameters = pywrapcp.DefaultRoutingSearchParameters()
 
-        # Set time limit
+        # Set time limits
         search_parameters.time_limit.seconds = time_limit
+
+        # Note: first_solution_time_limit is not available in all OR-Tools versions
+        # The solver will balance initial solution and optimization time automatically
 
         # Set first solution strategy
         # PARALLEL_CHEAPEST_INSERTION is more robust for problems with time windows
@@ -360,26 +370,65 @@ class VRPSolver:
         )
 
         # Set local search metaheuristic
+        # GUIDED_LOCAL_SEARCH is generally the best performer for CVRPTW
+        # Different lambda coefficients for different objectives
         if optimization_strategy == "minimize_vehicles":
-            # Guided local search - good for minimizing vehicles
             search_parameters.local_search_metaheuristic = (
                 routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
             )
+            # Lower coefficient for vehicle minimization (focus on feasibility)
+            search_parameters.guided_local_search_lambda_coefficient = 0.1
         elif optimization_strategy == "minimize_cost":
-            # Simulated annealing - good for cost optimization
             search_parameters.local_search_metaheuristic = (
-                routing_enums_pb2.LocalSearchMetaheuristic.SIMULATED_ANNEALING
+                routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
             )
+            # Higher coefficient for cost optimization (escape local optima)
+            search_parameters.guided_local_search_lambda_coefficient = 0.2
         else:  # balanced
-            # Automatic - let OR-Tools decide
             search_parameters.local_search_metaheuristic = (
-                routing_enums_pb2.LocalSearchMetaheuristic.AUTOMATIC
+                routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
             )
+            # Medium coefficient for balanced approach
+            search_parameters.guided_local_search_lambda_coefficient = 0.15
 
-        # Enable logging for debugging (can be disabled in production)
-        search_parameters.log_search = True
+        # Add solution limit to prevent excessive candidate solutions
+        search_parameters.solution_limit = 50000
+
+        # Add LNS (Large Neighborhood Search) time limit for faster iterations
+        # This helps the solver make more frequent improvements
+        search_parameters.lns_time_limit.seconds = 1
+
+        # Disable depth-first search (use best-first for better solutions)
+        search_parameters.use_depth_first_search = False
+
+        # Enable logging only in debug mode (configurable via config)
+        debug_enabled = self.config.get("debug", {}).get("enabled", False)
+        search_parameters.log_search = debug_enabled
 
         return search_parameters
+
+    def _print_performance_stats(self, optimization_strategy: str):
+        """
+        Print OR-Tools solver performance statistics.
+
+        Args:
+            optimization_strategy: Optimization strategy used
+        """
+        debug_enabled = self.config.get("debug", {}).get("enabled", False)
+
+        # Always print basic stats, detailed stats only in debug mode
+        print(f"\n[OR-Tools Solver] Performance Statistics:")
+        print(f"  Strategy: {optimization_strategy}")
+        print(f"  Objective value: {self.solution.ObjectiveValue()}")
+
+        if debug_enabled:
+            # Detailed statistics in debug mode
+            solver = self.routing.solver()
+            print(f"  Solutions collected: {solver.Solutions()}")
+            print(f"  Failures: {solver.Failures()}")
+            print(f"  Branches: {solver.Branches()}")
+            print(f"  Wall time: {solver.WallTime()} ms")
+            print(f"  Memory usage: {solver.MemoryUsage()} bytes")
 
     def _extract_solution(
         self, optimization_strategy: str, computation_time: float

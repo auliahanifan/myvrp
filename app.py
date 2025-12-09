@@ -493,6 +493,10 @@ def render_processing_section(optimization_strategy, time_limit):
                 return
 
             st.info("🎯 Using Two-Tier Hub Routing (Tier 1: Blind Van → HUB, Tier 2: Motors from DEPOT/HUB)")
+
+            # Load solver configuration
+            config = parser.get_config()
+
             solver = TwoTierVRPSolver(
                 orders=orders,
                 fleet=fleet,
@@ -500,7 +504,8 @@ def render_processing_section(optimization_strategy, time_limit):
                 hub=hub,
                 hub_manager=hub_manager,
                 full_distance_matrix=distance_matrix,
-                full_duration_matrix=duration_matrix
+                full_duration_matrix=duration_matrix,
+                config=config
             )
 
             with st.spinner(f"Optimizing routes (max {time_limit}s)..."):
@@ -535,7 +540,7 @@ def render_processing_section(optimization_strategy, time_limit):
 
             # Generate CSV with same timestamp
             timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            csv_generator = CSVGenerator(depot=depot)
+            csv_generator = CSVGenerator(depot=depot, hub=hub)
             csv_path = csv_generator.generate(
                 solution=solution,
                 output_dir=str(results_dir),

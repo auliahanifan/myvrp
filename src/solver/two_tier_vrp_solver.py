@@ -45,6 +45,7 @@ class TwoTierVRPSolver:
         hub_manager: HubRoutingManager,
         full_distance_matrix: np.ndarray,  # [DEPOT, HUB, all_customers]
         full_duration_matrix: np.ndarray,
+        config: dict = None,
     ):
         """
         Initialize two-tier VRP solver.
@@ -57,6 +58,7 @@ class TwoTierVRPSolver:
             hub_manager: HubRoutingManager for order classification
             full_distance_matrix: Distance matrix [DEPOT(0), HUB(1), customers(2+)]
             full_duration_matrix: Duration matrix [DEPOT(0), HUB(1), customers(2+)]
+            config: Configuration dictionary (for logging and other settings)
         """
         self.orders = orders
         self.fleet = fleet
@@ -65,6 +67,7 @@ class TwoTierVRPSolver:
         self.hub_manager = hub_manager
         self.full_distance_matrix = full_distance_matrix
         self.full_duration_matrix = full_duration_matrix
+        self.config = config or {}
 
         # Classify orders
         self.hub_orders, self.direct_orders = hub_manager.classify_orders(orders)
@@ -277,6 +280,7 @@ class TwoTierVRPSolver:
                 distance_matrix=tier2a_distance_matrix,
                 duration_matrix=tier2a_duration_matrix,
                 vehicle_id_offset=vehicle_id_offset,  # Pass offset for unique IDs
+                config=self.config,  # Pass config for optimized solver settings
             )
 
             solution = solver.solve(
@@ -347,6 +351,7 @@ class TwoTierVRPSolver:
                 distance_matrix=tier2b_distance_matrix,
                 duration_matrix=tier2b_duration_matrix,
                 vehicle_id_offset=vehicle_id_offset,  # Pass offset for unique IDs
+                config=self.config,  # Pass config for optimized solver settings
             )
 
             solution = solver.solve(

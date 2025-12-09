@@ -195,6 +195,49 @@ class YAMLParser:
             "save_solver_params": debug_config.get("save_solver_params", False),
         }
 
+    def get_solver_config(self) -> Dict:
+        """
+        Parse solver configuration from YAML.
+
+        Returns:
+            Dictionary with solver configuration
+        """
+        if self.data is None:
+            return {}
+
+        solver_config = self.data.get("solver", {})
+        return {
+            "time_limit": solver_config.get("time_limit", 300),
+            "optimization_strategy": solver_config.get("optimization_strategy", "balanced"),
+            "metaheuristic": solver_config.get("metaheuristic", "GUIDED_LOCAL_SEARCH"),
+            "guided_local_search": solver_config.get("guided_local_search", {
+                "lambda_coefficient_minimize_vehicles": 0.1,
+                "lambda_coefficient_minimize_cost": 0.2,
+                "lambda_coefficient_balanced": 0.15,
+            }),
+            "solution_limit": solver_config.get("solution_limit", 50000),
+            "lns_time_limit": solver_config.get("lns_time_limit", 1),
+            "use_depth_first_search": solver_config.get("use_depth_first_search", False),
+        }
+
+    def get_config(self) -> Dict:
+        """
+        Get complete configuration dictionary.
+
+        Returns:
+            Dictionary with all configuration sections
+        """
+        if self.data is None:
+            return {}
+
+        return {
+            "debug": self.get_debug_config(),
+            "solver": self.get_solver_config(),
+            "constraints": self.get_constraints_config(),
+            "penalties": self.get_penalties_config(),
+            "cache": self.get_cache_config(),
+        }
+
     def _parse_vehicles(self) -> List[tuple[Vehicle, int, bool]]:
         """
         Parse vehicles list from YAML data.

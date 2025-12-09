@@ -56,6 +56,26 @@ debug:
   save_distance_matrix: false # Save distance matrix to CSV for inspection
   save_solver_params: false # Save solver parameters to file
 
+# OR-Tools Solver Performance Configuration
+solver:
+  # Time limits (in seconds)
+  time_limit: 300 # Total solver time limit (default: 300s = 5 minutes)
+
+  # Optimization strategy: "minimize_vehicles", "minimize_cost", "balanced"
+  optimization_strategy: "balanced"
+
+  # Local search metaheuristic settings
+  metaheuristic: "GUIDED_LOCAL_SEARCH" # GUIDED_LOCAL_SEARCH, TABU_SEARCH, SIMULATED_ANNEALING
+  guided_local_search:
+    lambda_coefficient_minimize_vehicles: 0.1 # Penalty coefficient for vehicle minimization
+    lambda_coefficient_minimize_cost: 0.2 # Penalty coefficient for cost optimization
+    lambda_coefficient_balanced: 0.15 # Penalty coefficient for balanced approach
+
+  # Advanced performance settings
+  solution_limit: 50000 # Maximum number of solutions to explore
+  lns_time_limit: 1 # Large Neighborhood Search time limit per iteration (seconds)
+  use_depth_first_search: false # Use best-first search instead of depth-first
+
 # Hub configuration for two-tier delivery routing
 hub:
   enabled: true # Enable hub-based routing for Blind Van + Motor

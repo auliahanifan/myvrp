@@ -350,8 +350,13 @@ class MapVisualizer:
             show=True
         )
 
-        # Build list of waypoints (depot -> stops -> depot)
-        waypoints = [[self.depot.coordinates[0], self.depot.coordinates[1]]]
+        # Build list of waypoints (start location -> stops -> return to start)
+        # Determine starting location based on route source
+        if route.source == "HUB" and self.hub:
+            start_coords = [self.hub.coordinates[0], self.hub.coordinates[1]]
+        else:
+            start_coords = [self.depot.coordinates[0], self.depot.coordinates[1]]
+        waypoints = [start_coords]
 
         # Add customer stops and create markers
         for stop in route.stops:
@@ -367,8 +372,12 @@ class MapVisualizer:
                     route_number
                 )
 
-        # Add depot as end point (vehicles return to depot)
-        waypoints.append([self.depot.coordinates[0], self.depot.coordinates[1]])
+        # Add end point (vehicles return to their starting location)
+        if route.source == "HUB" and self.hub:
+            end_coords = [self.hub.coordinates[0], self.hub.coordinates[1]]
+        else:
+            end_coords = [self.depot.coordinates[0], self.depot.coordinates[1]]
+        waypoints.append(end_coords)
 
         # Draw route lines using actual road paths
         all_road_coords = []

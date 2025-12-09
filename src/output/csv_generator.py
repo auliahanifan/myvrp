@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Optional
 
 from ..models.route import RoutingSolution, Route, RouteStop
-from ..models.location import Depot
+from ..models.location import Depot, Hub
 
 
 class CSVGenerator:
@@ -24,14 +24,16 @@ class CSVGenerator:
     - Coordinates
     """
 
-    def __init__(self, depot: Depot):
+    def __init__(self, depot: Depot, hub: Optional[Hub] = None):
         """
         Initialize the CSV generator.
 
         Args:
             depot: Depot location for route information
+            hub: Hub location for two-tier routing (optional)
         """
         self.depot = depot
+        self.hub = hub
 
     def generate(
         self,
@@ -102,7 +104,11 @@ class CSVGenerator:
 
             # Write route data
             for route in active_routes:
-                previous_location = self.depot.name  # Start from depot/hub
+                # Determine starting location based on route source
+                if route.source == "HUB" and self.hub:
+                    previous_location = self.hub.name
+                else:
+                    previous_location = self.depot.name
 
                 for stop in route.stops:
                     order = stop.order
