@@ -9,8 +9,10 @@ font = "sans serif"
 headless = true
 runOnSave = false
 maxUploadSize = 200
-enableXsrfProtection = true
-enableCORS = false
+# Disable XSRF for reverse proxy behind Cloudflare (Cloudflare handles security)
+enableXsrfProtection = false
+# Enable CORS to allow proper header handling behind proxy
+enableCORS = true
 
 [browser]
 gatherUsageStats = false
