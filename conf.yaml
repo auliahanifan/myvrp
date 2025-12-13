@@ -76,37 +76,53 @@ solver:
   lns_time_limit: 1 # Large Neighborhood Search time limit per iteration (seconds)
   use_depth_first_search: false # Use best-first search instead of depth-first
 
-# Hub configuration for two-tier delivery routing
-hub:
-  enabled: true # Enable hub-based routing for Blind Van + Motor
-  location:
-    name: "Hub Utara"
-    latitude: -6.164667483144517
-    longitude: 106.87160878270096
-    address: "Kedung Kesenian"
+# Multi-Hub configuration for two-tier delivery routing
+# Supports 0 to N hubs. Set enabled: false or remove all locations for zero-hub mode.
+hubs:
+  enabled: true # Enable hub-based routing (false = all orders direct from DEPOT)
 
-  # Zone-based routing: Orders from these zones will be routed via hub
-  # (Blind Van: DEPOT → HUB, then Sepeda Motor: HUB → Customer)
-  zones_via_hub:
-    - "JAKARTA UTARA"
-    - "JAKARTA BARAT"
-    - "TANGERANG"
-    - "BEKASI UTARA"
-    # Add more zones as needed
+  # Hub definitions (0 to N hubs)
+  # Each hub has its own zone assignments
+  locations:
+    - id: "hub_utara"
+      name: "Hub Utara"
+      latitude: -6.164667483144517
+      longitude: 106.87160878270096
+      address: "Kedung Kesenian"
+      zones_via_hub:
+        - "JAKARTA UTARA"
+        - "JAKARTA BARAT"
+        - "TANGERANG"
+        - "BEKASI UTARA"
+
+    # Example: Add more hubs as needed
+    # - id: "hub_selatan"
+    #   name: "Hub Selatan"
+    #   latitude: -6.280000
+    #   longitude: 106.830000
+    #   address: "Jakarta Selatan"
+    #   zones_via_hub:
+    #     - "JAKARTA SELATAN"
+    #     - "DEPOK"
+    #     - "BOGOR"
 
   # Blind Van schedule for hub consolidation
+  # Blind Van visits all hubs in optimal sequence (TSP)
   blind_van_schedule:
-    departure_time: "05:30" # Depart from DEPOT (330 minutes from midnight)
-    arrival_time: "06:00" # Must arrive at HUB before this (360 minutes)
-    vehicle_name: "Blind Van" # Which vehicle type is used for consolidation
+    departure_time: "05:30" # Depart from DEPOT
+    arrival_time: "06:00" # Complete hub tour by this time
+    vehicle_name: "Blind Van" # Which vehicle type for consolidation
 
-  # Sepeda Motor can serve from both HUB and DEPOT
-  # If order is from hub zone, prioritize HUB start
-  # Otherwise, automatic optimization decides (DEPOT or HUB)
+  # Motor routing settings
   motor_routing:
-    can_depart_from_depot: true # Motor can start from main depot
-    can_depart_from_hub: true # Motor can start from hub
-    start_delivery_after: "06:00" # Sepeda Motor can start delivery after hub delivery starts (360 minutes)
+    can_depart_from_depot: true # Motors can start from main depot
+    can_depart_from_hub: true # Motors can start from hubs
+    start_delivery_after: "06:00" # Motors start after Blind Van completes
+
+  # How to handle orders from zones not assigned to any hub
+  # "nearest" = assign to geographically nearest hub
+  # "depot" = route directly from depot (no hub)
+  unassigned_zone_behavior: "nearest"
 
 # Cache configuration for Radar API (cost optimization)
 cache:

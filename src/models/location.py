@@ -70,14 +70,21 @@ class Hub(Location):
     """
     Represents a hub for two-tier delivery routing.
     Used for consolidation: Blind Van (DEPOT -> HUB), then Sepeda Motor (HUB -> Customer).
+
+    Attributes:
+        hub_id: Unique identifier for the hub (auto-generated from name if not provided)
     """
+    hub_id: str = ""
 
     def __post_init__(self):
         """Validate hub data."""
         super().__post_init__()
         if not self.name:
             self.name = "Hub"
+        # Auto-generate hub_id from name if not provided
+        if not self.hub_id:
+            self.hub_id = self.name.lower().replace(" ", "_")
 
     def __repr__(self) -> str:
         """String representation of the hub."""
-        return f"Hub({self.name}, {self.coordinates})"
+        return f"Hub({self.hub_id}: {self.name}, {self.coordinates})"

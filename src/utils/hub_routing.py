@@ -1,10 +1,13 @@
 """
 Hub routing logic for two-tier delivery system.
 Determines which orders should be routed via hub based on zones and optimization.
+Supports multi-hub configurations with zone-based and nearest-hub routing.
 """
 from typing import List, Tuple, Dict, Optional
+from math import radians, cos, sin, asin, sqrt
 from ..models.order import Order
 from ..models.location import Hub, Depot
+from ..models.hub_config import MultiHubConfig, HubConfig
 
 
 class HubRoutingManager:
@@ -102,6 +105,233 @@ class HubRoutingManager:
             "hub_percentage": (len(hub_orders) / len(orders) * 100) if orders else 0,
             "hub_zones": self.zones_via_hub,
         }
+
+
+class MultiHubRoutingManager:
+    """
+    Manages multi-hub routing for two-tier delivery system.
+
+    Supports 0 to N hubs with:
+    - Zone-based routing (priority): Orders from specified zones go to their assigned hub
+    - Nearest hub fallback: Orders from unassigned zones go to geographically nearest hub
+    - Direct depot routing: Orders can be routed directly from depot (no hub)
+
+    Usage:
+        manager = MultiHubRoutingManager(multi_hub_config, depot)
+        classified = manager.classify_orders(orders)
+        # Returns: {"hub_utara": [order1, order2], "hub_selatan": [order3], "DEPOT": [order4]}
+    """
+
+    DIRECT_KEY = "DEPOT"  # Key for orders routed directly from depot
+
+    def __init__(
+        self,
+        multi_hub_config: MultiHubConfig,
+        depot: Depot,
+    ):
+        """
+        Initialize multi-hub routing manager.
+
+        Args:
+            multi_hub_config: MultiHubConfig with all hub configurations
+            depot: Depot location object
+        """
+        self.config = multi_hub_config
+        self.depot = depot
+        self.zones_to_hub = multi_hub_config.get_zones_to_hub_mapping()
+
+    @property
+    def is_zero_hub_mode(self) -> bool:
+        """Check if no hubs are configured."""
+        return self.config.is_zero_hub_mode
+
+    @property
+    def num_hubs(self) -> int:
+        """Get number of configured hubs."""
+        return self.config.num_hubs
+
+    def get_hub_for_order(self, order: Order) -> Optional[str]:
+        """
+        Determine which hub an order should be routed through.
+
+        Priority:
+        1. Zone-based mapping (if order's zone is configured for a hub)
+        2. Nearest hub fallback (if unassigned_zone_behavior is "nearest")
+        3. Direct from depot (return None)
+
+        Args:
+            order: Order object
+
+        Returns:
+            hub_id string or None if should go directly from DEPOT
+        """
+        if self.config.is_zero_hub_mode:
+            return None
+
+        # Get order zone (kota field)
+        if order.kota:
+            zone = order.kota.upper()
+
+            # Priority 1: Zone-based mapping
+            if zone in self.zones_to_hub:
+                return self.zones_to_hub[zone]
+
+        # Priority 2: Nearest hub fallback (if configured)
+        if self.config.unassigned_zone_behavior == "nearest":
+            return self._get_nearest_hub(order)
+
+        # Default: Direct from depot
+        return None
+
+    def _get_nearest_hub(self, order: Order) -> Optional[str]:
+        """
+        Find the nearest hub to an order by Haversine distance.
+
+        Args:
+            order: Order object with coordinates
+
+        Returns:
+            hub_id of nearest hub or None if no hubs configured
+        """
+        if not self.config.hubs:
+            return None
+
+        min_distance = float('inf')
+        nearest_hub_id = None
+
+        for hub_config in self.config.hubs:
+            distance = self._haversine_distance(
+                order.coordinates,
+                hub_config.hub.coordinates
+            )
+            if distance < min_distance:
+                min_distance = distance
+                nearest_hub_id = hub_config.hub_id
+
+        return nearest_hub_id
+
+    def _haversine_distance(
+        self,
+        coord1: Tuple[float, float],
+        coord2: Tuple[float, float]
+    ) -> float:
+        """
+        Calculate distance between two coordinates in kilometers.
+
+        Args:
+            coord1: (latitude, longitude) tuple
+            coord2: (latitude, longitude) tuple
+
+        Returns:
+            Distance in kilometers
+        """
+        lat1, lon1 = radians(coord1[0]), radians(coord1[1])
+        lat2, lon2 = radians(coord2[0]), radians(coord2[1])
+        dlat, dlon = lat2 - lat1, lon2 - lon1
+        a = sin(dlat / 2) ** 2 + cos(lat1) * cos(lat2) * sin(dlon / 2) ** 2
+        return 2 * 6371 * asin(sqrt(a))  # Earth radius = 6371 km
+
+    def classify_orders(self, orders: List[Order]) -> Dict[str, List[Order]]:
+        """
+        Classify orders by their destination hub.
+
+        Args:
+            orders: List of orders to classify
+
+        Returns:
+            Dictionary mapping hub_id (or "DEPOT") to list of orders
+            Example: {"hub_utara": [o1, o2], "hub_selatan": [o3], "DEPOT": [o4]}
+        """
+        classified: Dict[str, List[Order]] = {}
+
+        for order in orders:
+            hub_id = self.get_hub_for_order(order)
+            key = hub_id if hub_id else self.DIRECT_KEY
+
+            if key not in classified:
+                classified[key] = []
+            classified[key].append(order)
+
+        return classified
+
+    def get_hub_orders(self, orders: List[Order]) -> List[Order]:
+        """
+        Get all orders that go through any hub (not direct from depot).
+
+        Args:
+            orders: List of orders
+
+        Returns:
+            List of orders routed through hubs
+        """
+        classified = self.classify_orders(orders)
+        hub_orders = []
+        for key, order_list in classified.items():
+            if key != self.DIRECT_KEY:
+                hub_orders.extend(order_list)
+        return hub_orders
+
+    def get_direct_orders(self, orders: List[Order]) -> List[Order]:
+        """
+        Get all orders that go directly from depot (no hub).
+
+        Args:
+            orders: List of orders
+
+        Returns:
+            List of orders routed directly from depot
+        """
+        classified = self.classify_orders(orders)
+        return classified.get(self.DIRECT_KEY, [])
+
+    def get_routing_summary(self, orders: List[Order]) -> Dict:
+        """
+        Get summary of hub routing classification.
+
+        Args:
+            orders: List of orders
+
+        Returns:
+            Dictionary with routing summary including per-hub breakdown
+        """
+        classified = self.classify_orders(orders)
+
+        summary = {
+            "total_orders": len(orders),
+            "total_hubs_used": len([k for k in classified.keys() if k != self.DIRECT_KEY]),
+            "hub_breakdown": {},
+            "direct_orders_count": len(classified.get(self.DIRECT_KEY, [])),
+            "direct_weight_kg": sum(
+                o.load_weight_in_kg for o in classified.get(self.DIRECT_KEY, [])
+            ),
+        }
+
+        total_hub_weight = 0.0
+        total_hub_orders = 0
+        for hub_id, hub_orders in classified.items():
+            if hub_id == self.DIRECT_KEY:
+                continue
+            weight = sum(o.load_weight_in_kg for o in hub_orders)
+            total_hub_weight += weight
+            total_hub_orders += len(hub_orders)
+
+            hub_config = self.config.get_hub_by_id(hub_id)
+            hub_name = hub_config.hub.name if hub_config else hub_id
+
+            summary["hub_breakdown"][hub_id] = {
+                "name": hub_name,
+                "count": len(hub_orders),
+                "weight_kg": weight,
+                "zones": hub_config.zones_via_hub if hub_config else [],
+            }
+
+        summary["total_hub_orders"] = total_hub_orders
+        summary["total_hub_weight_kg"] = total_hub_weight
+        summary["hub_percentage"] = (
+            (total_hub_orders / len(orders) * 100) if orders else 0
+        )
+
+        return summary
 
 
 def parse_hub_config(config_dict: Optional[Dict]) -> Optional[Dict]:

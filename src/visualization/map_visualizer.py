@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 from src.models.location import Depot, Hub
 from src.models.route import RoutingSolution, Route
+from src.models.hub_config import MultiHubConfig, HubConfig
 
 
 class MapVisualizer:
@@ -38,19 +39,28 @@ class MapVisualizer:
         '#118AB2', '#073B4C', '#EF476F', '#FFD166', '#06FFA5'
     ]
 
-    def __init__(self, depot: Depot, hub: Optional[Hub] = None, enable_road_routing: bool = True):
+    # Colors for hub markers
+    HUB_COLORS = ['blue', 'green', 'purple', 'orange', 'darkred', 'cadetblue', 'darkgreen', 'darkpurple']
+
+    def __init__(self, depot: Depot, hubs_config: Optional[MultiHubConfig] = None, enable_road_routing: bool = True):
         """
         Initialize the map visualizer
 
         Args:
             depot: Depot location
-            hub: Hub location (optional, for two-tier routing)
+            hubs_config: Multi-hub configuration (optional, for hub-based routing)
             enable_road_routing: Whether to use actual road paths vs straight lines
         """
         self.depot = depot
-        self.hub = hub
+        self.hubs_config = hubs_config
         self.osrm_url = "https://osrm.segarloka.cc"
         self.enable_road_routing = enable_road_routing
+
+        # Build hub color mapping
+        self.hub_color_map = {}
+        if hubs_config and not hubs_config.is_zero_hub_mode:
+            for i, hub_cfg in enumerate(hubs_config.hubs):
+                self.hub_color_map[hub_cfg.hub_id] = self.HUB_COLORS[i % len(self.HUB_COLORS)]
 
         # Cache directory for route geometries
         self.cache_dir = Path(".cache/route_geometry")
@@ -78,9 +88,9 @@ class MapVisualizer:
         # Add depot marker
         self._add_depot_marker(m)
 
-        # Add hub marker if hub is enabled
-        if self.hub:
-            self._add_hub_marker(m)
+        # Add hub markers if hubs are enabled
+        if self.hubs_config and not self.hubs_config.is_zero_hub_mode:
+            self._add_hub_markers(m)
 
         # Add routes with different colors
         for idx, route in enumerate(solution.routes):
@@ -126,9 +136,9 @@ class MapVisualizer:
         # Add depot marker
         self._add_depot_marker(m)
 
-        # Add hub marker if hub is enabled
-        if self.hub:
-            self._add_hub_marker(m)
+        # Add hub markers if hubs are enabled
+        if self.hubs_config and not self.hubs_config.is_zero_hub_mode:
+            self._add_hub_markers(m)
 
         # Add only the selected route with highlighted color
         color = '#FF0000'  # Bright red for single route
@@ -177,52 +187,68 @@ class MapVisualizer:
             opacity=0.5
         ).add_to(m)
 
-    def _add_hub_marker(self, m: folium.Map):
-        """Add hub marker to map for two-tier routing"""
-        if not self.hub:
+    def _add_hub_markers(self, m: folium.Map):
+        """Add hub markers to map for two-tier routing (supports multiple hubs)"""
+        if not self.hubs_config or self.hubs_config.is_zero_hub_mode:
             return
 
-        folium.Marker(
-            location=[self.hub.coordinates[0], self.hub.coordinates[1]],
-            popup=folium.Popup(
-                f"<b>📦 HUB</b><br>"
-                f"{self.hub.name}<br>"
-                f"{self.hub.address}<br>"
-                f"<i>{self.hub.coordinates[0]:.6f}, {self.hub.coordinates[1]:.6f}</i>",
-                max_width=300
-            ),
-            tooltip="📦 Hub (Consolidation Point)",
-            icon=folium.Icon(
-                color='blue',
-                icon='cube',
-                prefix='fa'
-            )
-        ).add_to(m)
+        for hub_cfg in self.hubs_config.hubs:
+            hub = hub_cfg.hub
+            hub_id = hub_cfg.hub_id
+            color = self.hub_color_map.get(hub_id, 'blue')
+            zones_str = ", ".join(hub_cfg.zones_via_hub[:3])
+            if len(hub_cfg.zones_via_hub) > 3:
+                zones_str += f" (+{len(hub_cfg.zones_via_hub) - 3} more)"
 
-        # Add a circle around hub (larger than depot)
-        folium.Circle(
-            location=[self.hub.coordinates[0], self.hub.coordinates[1]],
-            radius=300,
-            color='blue',
-            fill=True,
-            fillColor='blue',
-            fillOpacity=0.15,
-            weight=2,
-            opacity=0.6
-        ).add_to(m)
+            folium.Marker(
+                location=[hub.coordinates[0], hub.coordinates[1]],
+                popup=folium.Popup(
+                    f"<b>📦 {hub.name}</b><br>"
+                    f"<b>ID:</b> {hub_id}<br>"
+                    f"<b>Address:</b> {hub.address}<br>"
+                    f"<b>Zones:</b> {zones_str}<br>"
+                    f"<i>{hub.coordinates[0]:.6f}, {hub.coordinates[1]:.6f}</i>",
+                    max_width=300
+                ),
+                tooltip=f"📦 {hub.name} (Consolidation Point)",
+                icon=folium.Icon(
+                    color=color,
+                    icon='cube',
+                    prefix='fa'
+                )
+            ).add_to(m)
 
-        # Add label text
-        folium.Marker(
-            location=[self.hub.coordinates[0], self.hub.coordinates[1]],
-            popup="📦 Hub",
-            icon=folium.DivIcon(html="""
-                <div style="font-size: 12px; color: blue; font-weight: bold;
-                            background-color: white; padding: 3px 6px;
-                            border-radius: 3px; border: 1px solid blue;">
-                    HUB
-                </div>
-            """)
-        ).add_to(m)
+            # Add a circle around hub (larger than depot)
+            folium.Circle(
+                location=[hub.coordinates[0], hub.coordinates[1]],
+                radius=300,
+                color=color,
+                fill=True,
+                fillColor=color,
+                fillOpacity=0.15,
+                weight=2,
+                opacity=0.6
+            ).add_to(m)
+
+            # Add label text
+            folium.Marker(
+                location=[hub.coordinates[0], hub.coordinates[1]],
+                popup=f"📦 {hub.name}",
+                icon=folium.DivIcon(html=f"""
+                    <div style="font-size: 12px; color: {color}; font-weight: bold;
+                                background-color: white; padding: 3px 6px;
+                                border-radius: 3px; border: 1px solid {color};">
+                        {hub.name}
+                    </div>
+                """)
+            ).add_to(m)
+
+    def _get_hub_by_id(self, hub_id: str):
+        """Get hub object by ID from hubs_config"""
+        if not self.hubs_config:
+            return None
+        hub_cfg = self.hubs_config.get_hub_by_id(hub_id)
+        return hub_cfg.hub if hub_cfg else None
 
     def _get_road_path_with_retry(self, start_coords: Tuple[float, float], end_coords: Tuple[float, float], max_retries: int = 3) -> List[List[float]]:
         """
@@ -352,8 +378,10 @@ class MapVisualizer:
 
         # Build list of waypoints (start location -> stops -> return to start)
         # Determine starting location based on route source
-        if route.source == "HUB" and self.hub:
-            start_coords = [self.hub.coordinates[0], self.hub.coordinates[1]]
+        # route.source can be "DEPOT" or a hub_id (e.g., "hub_utara")
+        source_hub = self._get_hub_by_id(route.source) if route.source != "DEPOT" else None
+        if source_hub:
+            start_coords = [source_hub.coordinates[0], source_hub.coordinates[1]]
         else:
             start_coords = [self.depot.coordinates[0], self.depot.coordinates[1]]
         waypoints = [start_coords]
@@ -373,8 +401,8 @@ class MapVisualizer:
                 )
 
         # Add end point (vehicles return to their starting location)
-        if route.source == "HUB" and self.hub:
-            end_coords = [self.hub.coordinates[0], self.hub.coordinates[1]]
+        if source_hub:
+            end_coords = [source_hub.coordinates[0], source_hub.coordinates[1]]
         else:
             end_coords = [self.depot.coordinates[0], self.depot.coordinates[1]]
         waypoints.append(end_coords)

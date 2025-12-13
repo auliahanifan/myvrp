@@ -32,6 +32,7 @@ echo ""
 echo "🚀 Running Docker container on host port ${HOST_PORT}..."
 docker run -d \
   --name "${CONTAINER_NAME}" \
+  --cpus="1" \
   -p "${HOST_PORT}:${CONTAINER_PORT}" \
   --env-file .env \
   "${IMAGE_NAME}"

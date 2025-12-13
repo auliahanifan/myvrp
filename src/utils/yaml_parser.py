@@ -2,10 +2,13 @@
 YAML parser for vehicle configuration.
 Parses vehicle config YAML files and creates Vehicle objects with validation.
 """
+import warnings
 import yaml
 from typing import List, Optional, Dict
 from ..models.vehicle import Vehicle, VehicleFleet
-from .hub_routing import parse_hub_config
+from ..models.location import Hub
+from ..models.hub_config import HubConfig, MultiHubConfig
+from .hub_routing import parse_hub_config, time_str_to_minutes
 
 
 class YAMLParserError(Exception):
@@ -123,7 +126,9 @@ class YAMLParser:
 
     def get_hub_config(self) -> Optional[Dict]:
         """
-        Parse hub configuration from YAML.
+        Parse hub configuration from YAML (legacy single-hub format).
+
+        DEPRECATED: Use get_hubs_config() for multi-hub support.
 
         Returns:
             Dictionary with hub configuration or None if hub not enabled
@@ -142,6 +147,129 @@ class YAMLParser:
             return parse_hub_config(hub_config)
         except ValueError as e:
             raise YAMLParserError(f"Error parsing hub configuration: {str(e)}")
+
+    def get_hubs_config(self) -> MultiHubConfig:
+        """
+        Parse multi-hub configuration from YAML.
+
+        Supports both new multi-hub format and legacy single-hub format.
+        New format uses 'hubs.locations[]', legacy uses 'hub.location'.
+
+        Returns:
+            MultiHubConfig object (with is_zero_hub_mode=True if no hubs configured)
+
+        Raises:
+            YAMLParserError: If hub configuration is invalid
+        """
+        if self.data is None:
+            return MultiHubConfig(enabled=False)
+
+        # Check for new multi-hub format first
+        hubs_config = self.data.get("hubs", {})
+        if hubs_config and hubs_config.get("locations"):
+            return self._parse_multi_hub_config(hubs_config)
+
+        # Fall back to legacy single-hub format
+        hub_config = self.data.get("hub", {})
+        if hub_config and hub_config.get("enabled", False):
+            return self._convert_legacy_hub_config(hub_config)
+
+        # No hubs configured
+        return MultiHubConfig(enabled=False)
+
+    def _parse_multi_hub_config(self, config: Dict) -> MultiHubConfig:
+        """
+        Parse new multi-hub format from YAML.
+
+        Args:
+            config: The 'hubs' section from YAML
+
+        Returns:
+            MultiHubConfig object
+        """
+        try:
+            hub_configs = []
+            for loc in config.get("locations", []):
+                hub = Hub(
+                    name=loc.get("name", "Hub"),
+                    hub_id=loc.get("id", ""),
+                    coordinates=(
+                        loc.get("latitude", 0.0),
+                        loc.get("longitude", 0.0),
+                    ),
+                    address=loc.get("address", ""),
+                )
+                hub_config = HubConfig(
+                    hub=hub,
+                    hub_id=loc.get("id", hub.hub_id),
+                    zones_via_hub=loc.get("zones_via_hub", []),
+                )
+                hub_configs.append(hub_config)
+
+            schedule = config.get("blind_van_schedule", {})
+            motor = config.get("motor_routing", {})
+
+            return MultiHubConfig(
+                hubs=hub_configs,
+                enabled=config.get("enabled", True) and len(hub_configs) > 0,
+                blind_van_departure=time_str_to_minutes(schedule.get("departure_time", "05:30")),
+                blind_van_arrival=time_str_to_minutes(schedule.get("arrival_time", "06:00")),
+                motor_start_time=time_str_to_minutes(motor.get("start_delivery_after", "06:00")),
+                unassigned_zone_behavior=config.get("unassigned_zone_behavior", "nearest"),
+                blind_van_vehicle_name=schedule.get("vehicle_name", "Blind Van"),
+            )
+        except Exception as e:
+            raise YAMLParserError(f"Error parsing multi-hub configuration: {str(e)}")
+
+    def _convert_legacy_hub_config(self, config: Dict) -> MultiHubConfig:
+        """
+        Convert legacy single-hub format to new multi-hub format.
+
+        Args:
+            config: The 'hub' section from YAML (legacy format)
+
+        Returns:
+            MultiHubConfig object with single hub
+        """
+        warnings.warn(
+            "Legacy single-hub config format ('hub.location') detected. "
+            "Please migrate to new 'hubs.locations[]' format.",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+
+        try:
+            location = config.get("location", {})
+            hub = Hub(
+                name=location.get("name", "Hub"),
+                hub_id="hub_default",
+                coordinates=(
+                    location.get("latitude", 0.0),
+                    location.get("longitude", 0.0),
+                ),
+                address=location.get("address", ""),
+            )
+
+            hub_config = HubConfig(
+                hub=hub,
+                hub_id="hub_default",
+                zones_via_hub=config.get("zones_via_hub", []),
+            )
+
+            schedule = config.get("blind_van_schedule", {})
+            motor = config.get("motor_routing", {})
+
+            return MultiHubConfig(
+                hubs=[hub_config],
+                enabled=True,
+                blind_van_departure=time_str_to_minutes(schedule.get("departure_time", "05:30")),
+                blind_van_arrival=time_str_to_minutes(schedule.get("arrival_time", "06:00")),
+                motor_start_time=time_str_to_minutes(motor.get("start_delivery_after", "06:00")),
+                unassigned_zone_behavior="depot",  # Legacy behavior: unassigned goes direct
+                blind_van_vehicle_name=schedule.get("vehicle_name", "Blind Van"),
+            )
+        except Exception as e:
+            raise YAMLParserError(f"Error converting legacy hub configuration: {str(e)}")
 
     def get_constraints_config(self) -> Dict:
         """

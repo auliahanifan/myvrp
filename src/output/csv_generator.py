@@ -9,6 +9,7 @@ from typing import Optional
 
 from ..models.route import RoutingSolution, Route, RouteStop
 from ..models.location import Depot, Hub
+from ..models.hub_config import MultiHubConfig
 
 
 class CSVGenerator:
@@ -16,7 +17,7 @@ class CSVGenerator:
     Generates CSV output files for VRP routing solutions.
 
     Creates a single CSV file with all route information including:
-    - Source location (HUB or DEPOT)
+    - Source location (HUB name or DEPOT)
     - Trip number
     - Vehicle information
     - Stop details
@@ -24,16 +25,36 @@ class CSVGenerator:
     - Coordinates
     """
 
-    def __init__(self, depot: Depot, hub: Optional[Hub] = None):
+    def __init__(self, depot: Depot, hubs_config: Optional[MultiHubConfig] = None):
         """
         Initialize the CSV generator.
 
         Args:
             depot: Depot location for route information
-            hub: Hub location for two-tier routing (optional)
+            hubs_config: Multi-hub configuration for two-tier routing (optional)
         """
         self.depot = depot
-        self.hub = hub
+        self.hubs_config = hubs_config
+
+    def _get_source_name(self, source: str) -> str:
+        """
+        Get human-readable source name from route source identifier.
+
+        Args:
+            source: Route source ("DEPOT" or hub_id like "hub_utara")
+
+        Returns:
+            Human-readable source name
+        """
+        if source == "DEPOT":
+            return self.depot.name
+
+        if self.hubs_config:
+            hub_cfg = self.hubs_config.get_hub_by_id(source)
+            if hub_cfg:
+                return hub_cfg.hub.name
+
+        return source  # Fallback to source ID if not found
 
     def generate(
         self,
@@ -105,10 +126,7 @@ class CSVGenerator:
             # Write route data
             for route in active_routes:
                 # Determine starting location based on route source
-                if route.source == "HUB" and self.hub:
-                    previous_location = self.hub.name
-                else:
-                    previous_location = self.depot.name
+                previous_location = self._get_source_name(route.source)
 
                 for stop in route.stops:
                     order = stop.order
@@ -176,15 +194,15 @@ class CSVGenerator:
 
         filepath = output_path / f"{filename}.csv"
 
-        # Calculate per-route and per-source metrics
+        # Calculate per-route and per-source metrics (dynamic for multi-hub)
         route_data = []
-        source_metrics = {"HUB": {"routes": 0, "orders": 0, "distance": 0, "cost": 0},
-                         "DEPOT": {"routes": 0, "orders": 0, "distance": 0, "cost": 0}}
+        source_metrics = {}  # Dynamically populated per-source
 
         for route in solution.routes:
             if route.num_stops > 0:
+                source_name = self._get_source_name(route.source)
                 route_data.append({
-                    "Source": route.source,
+                    "Source": source_name,
                     "Trip #": route.trip_number,
                     "Vehicle": route.vehicle.name,
                     "Stops": route.num_stops,
@@ -194,8 +212,16 @@ class CSVGenerator:
                     "Departure": route.departure_time_str
                 })
 
-                # Aggregate by source
+                # Aggregate by source (dynamically created)
                 source = route.source
+                if source not in source_metrics:
+                    source_metrics[source] = {
+                        "name": source_name,
+                        "routes": 0,
+                        "orders": 0,
+                        "distance": 0,
+                        "cost": 0
+                    }
                 source_metrics[source]["routes"] += 1
                 source_metrics[source]["orders"] += route.num_stops
                 source_metrics[source]["distance"] += route.total_distance
@@ -217,14 +243,19 @@ class CSVGenerator:
             writer.writerow(["Computation Time (s)", f"{solution.computation_time:.2f}"])
             writer.writerow([])
 
-            # Source breakdown
+            # Source breakdown (dynamic for multi-hub support)
             writer.writerow(["BREAKDOWN BY SOURCE"])
             writer.writerow(["Source", "Routes", "Orders", "Distance (km)", "Cost (Rp)"])
-            for source in ["DEPOT", "HUB"]:
+            # Sort sources: DEPOT first, then hubs alphabetically
+            sorted_sources = sorted(
+                source_metrics.keys(),
+                key=lambda s: (0 if s == "DEPOT" else 1, s)
+            )
+            for source in sorted_sources:
                 metrics = source_metrics[source]
                 if metrics["routes"] > 0:
                     writer.writerow([
-                        source,
+                        metrics["name"],  # Use human-readable name
                         metrics["routes"],
                         metrics["orders"],
                         f"{metrics['distance']:.1f}",

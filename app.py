@@ -23,11 +23,12 @@ load_dotenv()
 # Import project modules
 from src.models.location import Depot, Location, Hub
 from src.models.order import Order
+from src.models.hub_config import MultiHubConfig, HubConfig
 from src.utils.csv_parser import CSVParser
 from src.utils.yaml_parser import YAMLParser
 from src.utils.distance_calculator import DistanceCalculator
-from src.utils.hub_routing import HubRoutingManager
-from src.solver.two_tier_vrp_solver import TwoTierVRPSolver
+from src.utils.hub_routing import MultiHubRoutingManager
+from src.solver.two_tier_vrp_solver import MultiHubVRPSolver
 from src.output.excel_generator import ExcelGenerator
 from src.output.csv_generator import CSVGenerator
 from src.visualization.map_visualizer import MapVisualizer
@@ -103,12 +104,11 @@ def initialize_session_state():
         st.session_state.csv_summary_path = None
     if 'depot' not in st.session_state:
         st.session_state.depot = None
-    if 'hub' not in st.session_state:
-        st.session_state.hub = None
-    if 'hub_config' not in st.session_state:
-        st.session_state.hub_config = None
-    if 'hub_manager' not in st.session_state:
-        st.session_state.hub_manager = None
+    # Multi-hub support
+    if 'hubs_config' not in st.session_state:
+        st.session_state.hubs_config = None  # MultiHubConfig object
+    if 'hub_routing_manager' not in st.session_state:
+        st.session_state.hub_routing_manager = None  # MultiHubRoutingManager
     if 'map_html_cache' not in st.session_state:
         st.session_state.map_html_cache = {}  # Cache map HTML by route filter
 
@@ -127,21 +127,16 @@ def get_depot_from_env():
     )
 
 
-def get_hub_from_yaml():
-    """Load hub configuration from conf.yaml if enabled"""
+def get_hubs_from_yaml() -> MultiHubConfig:
+    """Load multi-hub configuration from conf.yaml"""
     try:
         parser = YAMLParser("conf.yaml")
         parser.parse()  # Load data first
-        hub_config = parser.get_hub_config()
-
-        if hub_config is None:
-            return None, None
-
-        hub = hub_config.get("hub")
-        return hub, hub_config
+        hubs_config = parser.get_hubs_config()
+        return hubs_config
     except Exception as e:
         st.warning(f"⚠️ Could not load hub configuration: {str(e)}")
-        return None, None
+        return MultiHubConfig(enabled=False)
 
 
 def render_header():
@@ -337,7 +332,7 @@ def render_configuration_section():
         )
 
     with col2:
-        st.subheader("Lokasi Depot & Hub")
+        st.subheader("Lokasi Depot & Hubs")
 
         depot = get_depot_from_env()
         st.session_state.depot = depot
@@ -346,33 +341,35 @@ def render_configuration_section():
         st.write(f"**Depot - Alamat:** {depot.address}")
         st.write(f"**Depot - Koordinat:** {depot.coordinates[0]:.6f}, {depot.coordinates[1]:.6f}")
 
-        # Load and display hub configuration
-        hub, hub_config = get_hub_from_yaml()
-        st.session_state.hub = hub
-        st.session_state.hub_config = hub_config
+        # Load and display multi-hub configuration
+        hubs_config = get_hubs_from_yaml()
+        st.session_state.hubs_config = hubs_config
 
-        if hub:
-            st.markdown("---")
-            st.write(f"**Hub - Nama:** {hub.name}")
-            st.write(f"**Hub - Alamat:** {hub.address}")
-            st.write(f"**Hub - Koordinat:** {hub.coordinates[0]:.6f}, {hub.coordinates[1]:.6f}")
+        st.markdown("---")
 
-            if hub_config:
-                st.write(f"**Blind Van Depart:** {hub_config.get('blind_van_departure', 'N/A')} min")
-                st.write(f"**Blind Van Arrival:** {hub_config.get('blind_van_arrival', 'N/A')} min")
-                st.write(f"**Motor Start Delivery:** {hub_config.get('motor_start_time', 'N/A')} min")
-                zones = hub_config.get("zones_via_hub", [])
-                st.write(f"**Zones via Hub:** {', '.join(zones) if zones else 'None'}")
-
+        if hubs_config.is_zero_hub_mode:
             st.markdown(
-                '<div class="info-box">✅ Hub-based two-tier routing enabled</div>',
+                '<div class="info-box">📦 Zero Hub Mode: All orders routed directly from DEPOT</div>',
                 unsafe_allow_html=True
             )
         else:
             st.markdown(
-                '<div class="error-box">❌ Hub routing not configured. Please add hub configuration to conf.yaml</div>',
+                f'<div class="info-box">✅ Multi-Hub Mode: {hubs_config.num_hubs} hub(s) configured</div>',
                 unsafe_allow_html=True
             )
+
+            # Display each hub
+            for hub_cfg in hubs_config.hubs:
+                with st.expander(f"📦 {hub_cfg.hub.name} ({hub_cfg.hub_id})"):
+                    st.write(f"**Alamat:** {hub_cfg.hub.address}")
+                    st.write(f"**Koordinat:** {hub_cfg.hub.coordinates[0]:.6f}, {hub_cfg.hub.coordinates[1]:.6f}")
+                    st.write(f"**Zones:** {', '.join(hub_cfg.zones_via_hub) if hub_cfg.zones_via_hub else 'None'}")
+
+            # Schedule info
+            st.write(f"**Blind Van Depart:** {hubs_config.blind_van_departure} min")
+            st.write(f"**Blind Van Arrival:** {hubs_config.blind_van_arrival} min")
+            st.write(f"**Motor Start:** {hubs_config.motor_start_time} min")
+            st.write(f"**Unassigned Zone Behavior:** {hubs_config.unassigned_zone_behavior}")
 
     return optimization_strategy, time_limit
 
@@ -406,55 +403,55 @@ def render_processing_section(optimization_strategy, time_limit):
             orders = st.session_state.orders
             fleet = st.session_state.fleet
             depot = st.session_state.depot
-            hub = st.session_state.hub
-            hub_config = st.session_state.hub_config
+            hubs_config = st.session_state.hubs_config
 
-            # Classify orders by hub routing if hub is enabled
-            hub_manager = None
-            if hub and hub_config:
+            # Create MultiHubRoutingManager
+            hub_routing_manager = MultiHubRoutingManager(hubs_config, depot)
+            st.session_state.hub_routing_manager = hub_routing_manager
+
+            # Display hub routing summary
+            if not hubs_config.is_zero_hub_mode:
                 try:
-                    hub_manager = HubRoutingManager(
-                        hub=hub,
-                        depot=depot,
-                        zones_via_hub=hub_config.get("zones_via_hub", []),
-                        blind_van_arrival_time=hub_config.get("blind_van_arrival", 360),
-                        motor_start_time=hub_config.get("motor_start_time", 360),
-                    )
-                    st.session_state.hub_manager = hub_manager
-
-                    # Display hub routing summary
-                    summary = hub_manager.get_hub_routing_summary(orders)
-                    with st.expander("📊 Hub Routing Summary"):
+                    summary = hub_routing_manager.get_routing_summary(orders)
+                    with st.expander("📊 Multi-Hub Routing Summary"):
                         col_summary1, col_summary2, col_summary3 = st.columns(3)
                         with col_summary1:
-                            st.metric("Hub Orders", summary["hub_orders_count"])
+                            st.metric("Hub Orders", summary.get("total_hub_orders", 0))
                         with col_summary2:
-                            st.metric("Direct Orders", summary["direct_orders_count"])
+                            st.metric("Direct Orders", summary.get("direct_orders_count", 0))
                         with col_summary3:
-                            st.metric("Hub %", f"{summary['hub_percentage']:.1f}%")
+                            st.metric("Hub %", f"{summary.get('hub_percentage', 0):.1f}%")
 
                         col_weight1, col_weight2 = st.columns(2)
                         with col_weight1:
-                            st.metric("Hub Weight (kg)", f"{summary['hub_total_weight_kg']:.1f}")
+                            st.metric("Hub Weight (kg)", f"{summary.get('total_hub_weight_kg', 0):.1f}")
                         with col_weight2:
-                            st.metric("Direct Weight (kg)", f"{summary['direct_total_weight_kg']:.1f}")
+                            st.metric("Direct Weight (kg)", f"{summary.get('direct_weight_kg', 0):.1f}")
+
+                        # Per-hub breakdown
+                        if summary.get("hub_breakdown"):
+                            st.markdown("**Per-Hub Breakdown:**")
+                            for hub_id, hub_info in summary["hub_breakdown"].items():
+                                st.write(f"- {hub_info['name']}: {hub_info['count']} orders, {hub_info['weight_kg']:.1f} kg")
 
                 except Exception as e:
-                    st.warning(f"⚠️ Hub routing initialization failed: {str(e)}")
+                    st.warning(f"⚠️ Hub routing summary failed: {str(e)}")
 
             # Create locations list
-            # If hub is enabled: [DEPOT, HUB, customer_1, customer_2, ...]
-            # Otherwise: [DEPOT, customer_1, customer_2, ...]
-            if hub and hub_manager:
-                locations = [depot, hub] + [
-                    Location(o.display_name, o.coordinates, o.alamat)
-                    for o in orders
-                ]
-            else:
-                locations = [depot] + [
-                    Location(o.display_name, o.coordinates, o.alamat)
-                    for o in orders
-                ]
+            # Multi-hub: [DEPOT, HUB_1, HUB_2, ..., customer_1, customer_2, ...]
+            # Zero-hub: [DEPOT, customer_1, customer_2, ...]
+            locations = [depot]
+
+            # Add all hubs to locations list
+            if not hubs_config.is_zero_hub_mode:
+                for hub_cfg in hubs_config.hubs:
+                    locations.append(hub_cfg.hub)
+
+            # Add all customer locations
+            locations.extend([
+                Location(o.display_name, o.coordinates, o.alamat)
+                for o in orders
+            ])
 
             # Step 2: Calculate distance matrix with cache
             status_text.text("🗺️ Menghitung distance matrix via OSRM API...")
@@ -483,26 +480,25 @@ def render_processing_section(optimization_strategy, time_limit):
 
             progress_bar.progress(40)
 
-            # Step 3: Solve VRP using Two-Tier Routing
-            status_text.text(f"🧮 Solving 2E-VRPTW dengan strategi: {optimization_strategy}...")
+            # Step 3: Solve VRP using Multi-Hub Routing
+            status_text.text(f"🧮 Solving VRP dengan strategi: {optimization_strategy}...")
             progress_bar.progress(50)
 
-            # Always use two-tier solver
-            if not hub or not hub_manager:
-                st.error("❌ Hub configuration required. Please check conf.yaml hub settings.")
-                return
-
-            st.info("🎯 Using Two-Tier Hub Routing (Tier 1: Blind Van → HUB, Tier 2: Motors from DEPOT/HUB)")
+            if hubs_config.is_zero_hub_mode:
+                st.info("📦 Zero Hub Mode: All orders routed directly from DEPOT")
+            else:
+                hub_names = ", ".join([h.hub.name for h in hubs_config.hubs])
+                st.info(f"🎯 Multi-Hub Routing: Blind Van → [{hub_names}], Motors from each hub/DEPOT")
 
             # Load solver configuration
             config = parser.get_config()
 
-            solver = TwoTierVRPSolver(
+            solver = MultiHubVRPSolver(
                 orders=orders,
                 fleet=fleet,
                 depot=depot,
-                hub=hub,
-                hub_manager=hub_manager,
+                multi_hub_config=hubs_config,
+                hub_routing_manager=hub_routing_manager,
                 full_distance_matrix=distance_matrix,
                 full_duration_matrix=duration_matrix,
                 config=config
@@ -540,7 +536,7 @@ def render_processing_section(optimization_strategy, time_limit):
 
             # Generate CSV with same timestamp
             timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            csv_generator = CSVGenerator(depot=depot, hub=hub)
+            csv_generator = CSVGenerator(depot=depot, hubs_config=hubs_config)
             csv_path = csv_generator.generate(
                 solution=solution,
                 output_dir=str(results_dir),
@@ -691,7 +687,7 @@ def render_results_section():
 
     try:
         depot = st.session_state.depot
-        hub = st.session_state.hub  # Get hub if enabled
+        hubs_config = st.session_state.hubs_config
 
         # Create cache key based on selected route
         cache_key = f"route_{selected_route_idx}" if selected_route_idx is not None else "all_routes"
@@ -706,7 +702,7 @@ def render_results_section():
             # Generate map (first time for this filter)
             visualizer = MapVisualizer(
                 depot=depot,
-                hub=hub,  # Pass hub to visualizer
+                hubs_config=hubs_config,  # Pass multi-hub config to visualizer
                 enable_road_routing=True  # Use actual road paths
             )
 
@@ -763,7 +759,7 @@ def render_results_section():
                         f.write(map_html_content)
                 else:
                     # Fallback: generate map if not cached (shouldn't happen)
-                    visualizer = MapVisualizer(depot=depot, hub=hub, enable_road_routing=True)
+                    visualizer = MapVisualizer(depot=depot, hubs_config=hubs_config, enable_road_routing=True)
                     if selected_route_idx is not None:
                         visualizer.save_single_route_map(solution, selected_route_idx, str(map_path))
                     else:

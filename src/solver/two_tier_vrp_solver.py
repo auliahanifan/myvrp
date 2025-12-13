@@ -1,9 +1,13 @@
 """
-Two-Tier VRP Solver for Hub-based consolidation routing.
+Multi-Hub VRP Solver for Hub-based consolidation routing.
 
-Tier 1: Blind Van consolidates bulk delivery to hub (DEPOT -> HUB -> DEPOT, 05:30-06:00)
-Tier 2a: Motors from HUB serve hub-zone orders (HUB -> customers -> HUB, 06:00+)
-Tier 2b: Motors from DEPOT serve direct-zone orders (DEPOT -> customers -> DEPOT, 06:00+)
+Supports 0 to N hubs with:
+- Zero Hub Mode: All orders routed directly from DEPOT
+- Single Hub Mode: Traditional two-tier (Blind Van + Motors)
+- Multi Hub Mode: Blind Van TSP tour to all hubs, Motors from each hub/DEPOT
+
+Tier 1: Blind Van consolidates bulk delivery to hubs (DEPOT -> Hub1 -> Hub2 -> ... -> DEPOT)
+Tier 2: Motors from each hub serve that hub's orders, Motors from DEPOT serve direct orders
 """
 from typing import List, Tuple, Optional, Dict
 import numpy as np
@@ -13,7 +17,8 @@ from ..models.order import Order
 from ..models.vehicle import VehicleFleet, Vehicle
 from ..models.location import Depot, Hub, Location
 from ..models.route import Route, RouteStop, RoutingSolution
-from ..utils.hub_routing import HubRoutingManager
+from ..models.hub_config import MultiHubConfig, HubConfig, HubIndexManager
+from ..utils.hub_routing import MultiHubRoutingManager
 from .vrp_solver import VRPSolver
 
 
@@ -22,18 +27,19 @@ class TwoTierRoutingError(Exception):
     pass
 
 
-class TwoTierVRPSolver:
+class MultiHubVRPSolver:
     """
-    Two-tier routing solver for hub-based consolidation.
+    Multi-hub two-tier routing solver.
 
-    Tier 1: Blind Van delivers bulk to hub (DEPOT -> HUB -> DEPOT)
-    Tier 2a: Motors from HUB for hub-zone orders (HUB -> customers -> HUB)
-    Tier 2b: Motors from DEPOT for direct-zone orders (DEPOT -> customers -> DEPOT)
+    Modes:
+    - Zero Hub: All orders from DEPOT (single-tier VRP)
+    - Single Hub: DEPOT -> HUB -> DEPOT, then Motors from HUB/DEPOT
+    - Multi Hub: DEPOT -> Hub1 -> Hub2 -> ... -> DEPOT (TSP), then Motors from each hub
 
-    This ensures optimal distribution where:
-    - Blind Van makes one trip to consolidate goods at HUB
-    - Hub-zone orders are served by motors starting from HUB
-    - Direct-zone orders are served by motors starting from DEPOT
+    Matrix Structure:
+    - Index 0: DEPOT
+    - Index 1 to N: HUB_1, HUB_2, ..., HUB_N
+    - Index N+1 onwards: Customers
     """
 
     def __init__(
@@ -41,40 +47,61 @@ class TwoTierVRPSolver:
         orders: List[Order],
         fleet: VehicleFleet,
         depot: Depot,
-        hub: Hub,
-        hub_manager: HubRoutingManager,
-        full_distance_matrix: np.ndarray,  # [DEPOT, HUB, all_customers]
+        multi_hub_config: MultiHubConfig,
+        hub_routing_manager: MultiHubRoutingManager,
+        full_distance_matrix: np.ndarray,
         full_duration_matrix: np.ndarray,
         config: dict = None,
     ):
         """
-        Initialize two-tier VRP solver.
+        Initialize multi-hub VRP solver.
 
         Args:
             orders: List of all orders
-            fleet: Vehicle fleet (must have Blind Van and Sepeda Motor)
+            fleet: Vehicle fleet (may include Blind Van and Motors)
             depot: Main depot location
-            hub: Hub location
-            hub_manager: HubRoutingManager for order classification
-            full_distance_matrix: Distance matrix [DEPOT(0), HUB(1), customers(2+)]
-            full_duration_matrix: Duration matrix [DEPOT(0), HUB(1), customers(2+)]
-            config: Configuration dictionary (for logging and other settings)
+            multi_hub_config: MultiHubConfig with all hub configurations
+            hub_routing_manager: MultiHubRoutingManager for order classification
+            full_distance_matrix: Distance matrix [DEPOT, HUB_1, ..., HUB_N, customers]
+            full_duration_matrix: Duration matrix [DEPOT, HUB_1, ..., HUB_N, customers]
+            config: Configuration dictionary
         """
         self.orders = orders
         self.fleet = fleet
         self.depot = depot
-        self.hub = hub
-        self.hub_manager = hub_manager
+        self.hub_config = multi_hub_config
+        self.hub_manager = hub_routing_manager
         self.full_distance_matrix = full_distance_matrix
         self.full_duration_matrix = full_duration_matrix
         self.config = config or {}
 
-        # Classify orders
-        self.hub_orders, self.direct_orders = hub_manager.classify_orders(orders)
+        # Create index manager for dynamic matrix indexing
+        hub_ids = multi_hub_config.get_all_hub_ids()
+        self.index_manager = HubIndexManager(hub_ids)
 
-        print(f"[Two-Tier VRP] Hub orders: {len(self.hub_orders)}, Direct orders: {len(self.direct_orders)}")
-        print(f"[Two-Tier VRP] Hub weight: {sum(o.load_weight_in_kg for o in self.hub_orders):.1f} kg")
-        print(f"[Two-Tier VRP] Direct weight: {sum(o.load_weight_in_kg for o in self.direct_orders):.1f} kg")
+        # Classify orders by hub
+        self.classified_orders = hub_routing_manager.classify_orders(orders)
+
+        self._print_classification_summary()
+
+    def _print_classification_summary(self):
+        """Print order classification summary."""
+        print("\n[Multi-Hub VRP] Order Classification:")
+        total_hub_orders = 0
+        total_hub_weight = 0.0
+
+        for source_id, source_orders in self.classified_orders.items():
+            weight = sum(o.load_weight_in_kg for o in source_orders)
+            if source_id == MultiHubRoutingManager.DIRECT_KEY:
+                print(f"  DEPOT (direct): {len(source_orders)} orders, {weight:.1f} kg")
+            else:
+                hub_config = self.hub_config.get_hub_by_id(source_id)
+                hub_name = hub_config.hub.name if hub_config else source_id
+                print(f"  {hub_name} ({source_id}): {len(source_orders)} orders, {weight:.1f} kg")
+                total_hub_orders += len(source_orders)
+                total_hub_weight += weight
+
+        print(f"  Total hub orders: {total_hub_orders}, Total hub weight: {total_hub_weight:.1f} kg")
 
     def solve(
         self,
@@ -82,11 +109,7 @@ class TwoTierVRPSolver:
         time_limit: int = 300,
     ) -> RoutingSolution:
         """
-        Solve two-tier routing problem.
-
-        Tier 1: Blind Van (DEPOT -> HUB -> DEPOT) - Consolidation only
-        Tier 2a: Motors from HUB (HUB -> hub-zone customers -> HUB)
-        Tier 2b: Motors from DEPOT (DEPOT -> direct-zone customers -> DEPOT)
+        Solve multi-hub routing problem.
 
         Args:
             optimization_strategy: Optimization strategy
@@ -98,115 +121,237 @@ class TwoTierVRPSolver:
         start_time = time_module.time()
 
         try:
-            # Track vehicle counter across all tiers for unique vehicle IDs
+            # Zero hub mode: Direct routing from DEPOT
+            if self.hub_config.is_zero_hub_mode:
+                print("\n[Zero Hub Mode] All orders routing directly from DEPOT")
+                return self._solve_zero_hub_mode(optimization_strategy, time_limit)
+
+            all_routes = []
+            all_unassigned = []
             vehicle_counter = 0
 
-            # Tier 1: Solve Blind Van consolidation to hub (DEPOT -> HUB -> DEPOT)
-            print("\n[Tier 1] Solving Blind Van consolidation (DEPOT -> HUB -> DEPOT)...")
-            tier1_routes = self._solve_tier1_blind_van(time_limit)
+            # Tier 1: Blind Van multi-hub tour
+            print("\n[Tier 1] Solving Blind Van multi-hub consolidation...")
+            tier1_routes = self._solve_tier1_blind_van_multi_hub(time_limit)
+            all_routes.extend(tier1_routes)
             vehicle_counter += len(tier1_routes)
 
-            # Tier 2: Solve Motors from both HUB and DEPOT
-            print("\n[Tier 2] Solving Motor routes from HUB and DEPOT...")
-            tier2_routes, unassigned = self._solve_tier2_motor(time_limit, vehicle_counter)
+            # Tier 2: Motors from each hub and DEPOT
+            print("\n[Tier 2] Solving Motor routes from each hub and DEPOT...")
+            tier2_routes, tier2_unassigned = self._solve_tier2_all_sources(
+                time_limit, vehicle_counter
+            )
+            all_routes.extend(tier2_routes)
+            all_unassigned.extend(tier2_unassigned)
 
-            # Combine solutions
-            all_routes = tier1_routes + tier2_routes
             computation_time = time_module.time() - start_time
 
             solution = RoutingSolution(
                 routes=all_routes,
-                unassigned_orders=unassigned,
+                unassigned_orders=all_unassigned,
                 optimization_strategy=optimization_strategy,
                 computation_time=computation_time,
             )
 
-            print(f"\n[Two-Tier Solution] {len(all_routes)} total routes, computation time: {computation_time:.2f}s")
+            print(f"\n[Multi-Hub Solution] {len(all_routes)} total routes, computation time: {computation_time:.2f}s")
             return solution
 
         except Exception as e:
-            raise TwoTierRoutingError(f"Two-tier routing failed: {str(e)}")
+            raise TwoTierRoutingError(f"Multi-hub routing failed: {str(e)}")
 
-    def _solve_tier1_blind_van(self, time_limit: int) -> List[Route]:
+    def _solve_zero_hub_mode(
+        self,
+        optimization_strategy: str,
+        time_limit: int
+    ) -> RoutingSolution:
         """
-        Solve Tier 1: Blind Van bulk delivery to HUB only (DEPOT -> HUB -> DEPOT).
+        Solve with all orders directly from DEPOT (no hub routing).
 
-        Blind Van makes ONE trip carrying bulk goods (total weight of all hub orders) to HUB.
-        NO customer deliveries - customers are served by Tier 2a motors from HUB.
+        Args:
+            optimization_strategy: Optimization strategy
+            time_limit: Time limit in seconds
+
+        Returns:
+            RoutingSolution from single-tier VRP
+        """
+        # Extract depot-only matrix (remove hub rows/columns if any)
+        # In zero-hub mode, matrix should be [DEPOT, customers...]
+        # But we still use index manager in case config had hubs but enabled=false
+
+        depot_idx = self.index_manager.get_depot_index()
+        customer_indices = [
+            self.index_manager.get_customer_index(i)
+            for i in range(len(self.orders))
+        ]
+        all_indices = [depot_idx] + customer_indices
+
+        distance_matrix = self._extract_submatrix(self.full_distance_matrix, all_indices)
+        duration_matrix = self._extract_submatrix(self.full_duration_matrix, all_indices)
+
+        solver = VRPSolver(
+            orders=self.orders,
+            fleet=self.fleet,
+            depot=self.depot,
+            distance_matrix=distance_matrix,
+            duration_matrix=duration_matrix,
+            config=self.config,
+        )
+
+        solution = solver.solve(optimization_strategy, time_limit)
+
+        # Mark all routes as from DEPOT
+        for route in solution.routes:
+            route.source = "DEPOT"
+
+        return solution
+
+    def _solve_tier1_blind_van_multi_hub(self, time_limit: int) -> List[Route]:
+        """
+        Solve Tier 1: Blind Van visits all hubs with orders in optimal sequence.
+
+        Route: DEPOT -> Hub_A -> Hub_B -> ... -> DEPOT
+        Uses TSP (nearest neighbor heuristic) to find optimal hub visit sequence.
 
         Args:
             time_limit: Time limit in seconds
 
         Returns:
-            List with single Blind Van route (DEPOT -> HUB -> DEPOT)
+            List with Blind Van route(s)
         """
-        if not self.hub_orders:
+        # Find hubs that have orders
+        hubs_with_orders = [
+            hub_id for hub_id in self.classified_orders.keys()
+            if hub_id != MultiHubRoutingManager.DIRECT_KEY
+        ]
+
+        if not hubs_with_orders:
             print("[Tier 1] No hub orders, skipping Blind Van")
             return []
 
-        # Get Blind Van vehicle type
-        blind_van = None
-        for vehicle_type, count, unlimited in self.fleet.vehicle_types:
-            if vehicle_type.name == "Blind Van":
-                blind_van = vehicle_type
-                break
-
+        blind_van = self._get_blind_van_vehicle()
         if not blind_van:
-            raise TwoTierRoutingError("Blind Van not found in vehicle fleet")
+            print("[Tier 1] Warning: Blind Van not found in fleet, skipping consolidation")
+            return []
 
-        # Calculate total weight to deliver to HUB
-        hub_weight = sum(o.load_weight_in_kg for o in self.hub_orders)
+        # Solve TSP for optimal hub visit sequence
+        hub_sequence = self._solve_hub_tsp(hubs_with_orders)
 
-        # Create HUB consolidation order
-        hub_order = Order(
-            sale_order_id="HUB_CONSOLIDATION",
-            delivery_date=self.hub_orders[0].delivery_date,
-            delivery_time="05:30-06:00",
-            load_weight_in_kg=hub_weight,
-            partner_id="HUB",
-            display_name="Hub Consolidation",
-            alamat=self.hub.address,
-            coordinates=self.hub.coordinates,
-            kota="HUB",
-            is_priority=False,
-        )
+        # Create Blind Van route with stops at each hub
+        route_stops = []
+        total_distance = 0.0
+        prev_matrix_idx = self.index_manager.get_depot_index()  # Start from DEPOT
 
-        # Create single HUB stop
-        hub_stop = RouteStop(
-            order=hub_order,
-            arrival_time=360,  # 06:00
-            departure_time=360,
-            distance_from_prev=self.full_distance_matrix[0, 1],  # DEPOT -> HUB
-            cumulative_weight=hub_weight,
-            sequence=0,
-        )
+        for seq, hub_id in enumerate(hub_sequence):
+            hub_config = self.hub_config.get_hub_by_id(hub_id)
+            if not hub_config:
+                continue
 
-        # Create Blind Van route: DEPOT -> HUB -> DEPOT
-        blind_van_route = Route(
+            hub_orders = self.classified_orders[hub_id]
+            hub_weight = sum(o.load_weight_in_kg for o in hub_orders)
+
+            hub_matrix_idx = self.index_manager.get_hub_index(hub_id)
+            distance = self.full_distance_matrix[prev_matrix_idx, hub_matrix_idx]
+            total_distance += distance
+
+            # Create hub consolidation order
+            hub_order = Order(
+                sale_order_id=f"HUB_CONSOLIDATION_{hub_id}",
+                delivery_date=hub_orders[0].delivery_date if hub_orders else "2025-01-01",
+                delivery_time="05:30-06:00",
+                load_weight_in_kg=hub_weight,
+                partner_id=hub_id,
+                display_name=f"Hub Consolidation ({hub_config.hub.name})",
+                alamat=hub_config.hub.address,
+                coordinates=hub_config.hub.coordinates,
+                kota="HUB",
+                is_priority=False,
+            )
+
+            # Calculate cumulative weight
+            prev_weight = route_stops[-1].cumulative_weight if route_stops else 0
+
+            stop = RouteStop(
+                order=hub_order,
+                arrival_time=self.hub_config.blind_van_arrival,
+                departure_time=self.hub_config.blind_van_arrival,
+                distance_from_prev=distance,
+                cumulative_weight=prev_weight + hub_weight,
+                sequence=seq,
+            )
+            route_stops.append(stop)
+            prev_matrix_idx = hub_matrix_idx
+
+        # Add return to depot distance
+        return_distance = self.full_distance_matrix[prev_matrix_idx, self.index_manager.get_depot_index()]
+        total_distance += return_distance
+
+        route = Route(
             vehicle=blind_van,
-            stops=[hub_stop],
-            total_distance=self.full_distance_matrix[0, 1] * 2,  # DEPOT->HUB + HUB->DEPOT
-            total_cost=self.full_distance_matrix[0, 1] * 2 * blind_van.cost_per_km,
-            departure_time=330,  # 05:30
+            stops=route_stops,
+            total_distance=total_distance,
+            total_cost=total_distance * blind_van.cost_per_km,
+            departure_time=self.hub_config.blind_van_departure,
             source="DEPOT",
-            trip_number=1
+            trip_number=1,
         )
 
-        print(f"[Tier 1] ✅ Blind Van: DEPOT -> HUB -> DEPOT")
-        print(f"[Tier 1]   Distance: {blind_van_route.total_distance:.1f} km, Weight: {hub_weight:.1f} kg, Cost: Rp {blind_van_route.total_cost:,.0f}")
+        hub_names = " -> ".join([
+            self.hub_config.get_hub_by_id(h).hub.name for h in hub_sequence
+        ])
+        print(f"[Tier 1] Blind Van: DEPOT -> {hub_names} -> DEPOT")
+        print(f"[Tier 1]   Distance: {total_distance:.1f} km, Stops: {len(hub_sequence)}, Cost: Rp {route.total_cost:,.0f}")
 
-        return [blind_van_route]
+        return [route]
 
-    def _solve_tier2_motor(self, time_limit: int, vehicle_id_offset: int) -> Tuple[List[Route], List[Order]]:
+    def _solve_hub_tsp(self, hub_ids: List[str]) -> List[str]:
         """
-        Solve Tier 2: Motor distribution from BOTH HUB and DEPOT.
+        Solve TSP to find optimal hub visit sequence using nearest neighbor heuristic.
 
-        Tier 2a: Motors from HUB for hub-zone orders (HUB → customers → HUB)
-        Tier 2b: Motors from DEPOT for direct-zone orders (DEPOT → customers → DEPOT)
+        Args:
+            hub_ids: List of hub IDs to visit
+
+        Returns:
+            Ordered list of hub IDs representing optimal visit sequence
+        """
+        if len(hub_ids) <= 1:
+            return hub_ids
+
+        # Simple nearest neighbor TSP
+        visited = [False] * len(hub_ids)
+        sequence = []
+        current_matrix_idx = self.index_manager.get_depot_index()
+
+        for _ in range(len(hub_ids)):
+            min_dist = float('inf')
+            next_hub_idx = -1
+
+            for i, hub_id in enumerate(hub_ids):
+                if visited[i]:
+                    continue
+                hub_matrix_idx = self.index_manager.get_hub_index(hub_id)
+                dist = self.full_distance_matrix[current_matrix_idx, hub_matrix_idx]
+                if dist < min_dist:
+                    min_dist = dist
+                    next_hub_idx = i
+
+            if next_hub_idx >= 0:
+                visited[next_hub_idx] = True
+                sequence.append(hub_ids[next_hub_idx])
+                current_matrix_idx = self.index_manager.get_hub_index(hub_ids[next_hub_idx])
+
+        return sequence
+
+    def _solve_tier2_all_sources(
+        self,
+        time_limit: int,
+        vehicle_id_offset: int
+    ) -> Tuple[List[Route], List[Order]]:
+        """
+        Solve Tier 2 motor routing from all sources (hubs and DEPOT).
 
         Args:
             time_limit: Time limit in seconds
-            vehicle_id_offset: Starting vehicle ID offset (continues from Tier 1)
+            vehicle_id_offset: Starting vehicle ID offset
 
         Returns:
             Tuple of (routes, unassigned_orders)
@@ -214,276 +359,265 @@ class TwoTierVRPSolver:
         all_routes = []
         all_unassigned = []
 
-        # Allocate vehicles smartly between HUB and DEPOT (ONCE - no duplication)
-        print("\n[Vehicle Allocation] Splitting global vehicle pool...")
-        hub_fleet, depot_fleet = self._allocate_vehicles_smartly()
+        # Allocate vehicles across all sources
+        source_fleets = self._allocate_vehicles_to_sources()
 
-        # Tier 2a: Motors from HUB for hub-zone orders
-        print("\n[Tier 2a] Solving Motors from HUB for hub-zone customers...")
-        tier2a_routes, tier2a_unassigned = self._solve_tier2a_hub(time_limit, vehicle_id_offset, hub_fleet)
-        all_routes.extend(tier2a_routes)
-        all_unassigned.extend(tier2a_unassigned)
+        for source_id, source_orders in self.classified_orders.items():
+            if not source_orders:
+                continue
 
-        # Update offset for Tier 2b
-        vehicle_id_offset += len(tier2a_routes)
+            source_fleet = source_fleets.get(source_id)
+            if not source_fleet:
+                print(f"[Tier 2] Warning: No fleet allocated for {source_id}")
+                continue
 
-        # Tier 2b: Motors from DEPOT for direct-zone orders
-        print("\n[Tier 2b] Solving Motors from DEPOT for direct-zone customers...")
-        tier2b_routes, tier2b_unassigned = self._solve_tier2b_depot(time_limit, vehicle_id_offset, depot_fleet)
-        all_routes.extend(tier2b_routes)
-        all_unassigned.extend(tier2b_unassigned)
+            if source_id == MultiHubRoutingManager.DIRECT_KEY:
+                # Direct orders from DEPOT
+                print(f"\n[Tier 2-DEPOT] Solving {len(source_orders)} direct orders...")
+                routes, unassigned = self._solve_tier2_from_depot(
+                    source_orders, source_fleet, time_limit, vehicle_id_offset
+                )
+            else:
+                # Orders from specific hub
+                hub_config = self.hub_config.get_hub_by_id(source_id)
+                hub_name = hub_config.hub.name if hub_config else source_id
+                print(f"\n[Tier 2-{source_id}] Solving {len(source_orders)} orders from {hub_name}...")
+                routes, unassigned = self._solve_tier2_from_hub(
+                    source_id, source_orders, source_fleet, time_limit, vehicle_id_offset
+                )
+
+            all_routes.extend(routes)
+            all_unassigned.extend(unassigned)
+            vehicle_id_offset += len(routes)
 
         return all_routes, all_unassigned
 
-    def _solve_tier2a_hub(self, time_limit: int, vehicle_id_offset: int, allocated_fleet: VehicleFleet) -> Tuple[List[Route], List[Order]]:
+    def _solve_tier2_from_hub(
+        self,
+        hub_id: str,
+        orders: List[Order],
+        fleet: VehicleFleet,
+        time_limit: int,
+        vehicle_offset: int
+    ) -> Tuple[List[Route], List[Order]]:
         """
-        Solve Tier 2a: Motor distribution FROM HUB for hub-zone orders.
-
-        Motors deliver hub-zone orders starting from HUB.
-        Location indices: 0=HUB, 1+=hub-zone-customers
+        Solve motor routing from a specific hub.
 
         Args:
+            hub_id: Hub identifier
+            orders: Orders to deliver from this hub
+            fleet: Allocated fleet for this hub
             time_limit: Time limit in seconds
-            vehicle_id_offset: Starting vehicle ID offset (continues from Tier 1)
-            allocated_fleet: Pre-allocated fleet for HUB routes (from smart allocation)
+            vehicle_offset: Vehicle ID offset
 
         Returns:
             Tuple of (routes, unassigned_orders)
         """
-        if not self.hub_orders:
-            print("[Tier 2a] No hub-zone orders, Motors from HUB not needed")
-            return [], []
+        hub_config = self.hub_config.get_hub_by_id(hub_id)
+        if not hub_config:
+            print(f"[Tier 2] Error: Hub {hub_id} not found")
+            return [], orders
 
-        # Create distance matrix for hub-zone orders with HUB as depot
-        # Get indices of hub-zone customers in full matrix
-        hub_customer_indices = [i + 2 for i, order in enumerate(self.orders) if order in self.hub_orders]
+        hub_matrix_idx = self.index_manager.get_hub_index(hub_id)
 
-        # Build custom distance matrix: [HUB, hub_customer_1, hub_customer_2, ...]
-        # Map: HUB (index 1 in full matrix) becomes index 0 in tier2a matrix
-        all_indices = [1] + hub_customer_indices
-        n = len(all_indices)
+        # Build sub-matrix: [HUB, orders...]
+        order_indices = []
+        for order in orders:
+            try:
+                order_idx = self.orders.index(order)
+                order_indices.append(self.index_manager.get_customer_index(order_idx))
+            except ValueError:
+                continue
 
-        tier2a_distance_matrix = np.zeros((n, n))
-        tier2a_duration_matrix = np.zeros((n, n))
+        all_indices = [hub_matrix_idx] + order_indices
 
-        for i, idx1 in enumerate(all_indices):
-            for j, idx2 in enumerate(all_indices):
-                tier2a_distance_matrix[i, j] = self.full_distance_matrix[idx1, idx2]
-                tier2a_duration_matrix[i, j] = self.full_duration_matrix[idx1, idx2]
+        distance_matrix = self._extract_submatrix(self.full_distance_matrix, all_indices)
+        duration_matrix = self._extract_submatrix(self.full_duration_matrix, all_indices)
 
-        # Solve with hub-zone orders, using HUB as depot
         try:
             solver = VRPSolver(
-                orders=self.hub_orders,  # Hub-zone orders
-                fleet=allocated_fleet,  # Use allocated fleet from smart allocation
-                depot=self.hub,  # Use HUB as depot
-                distance_matrix=tier2a_distance_matrix,
-                duration_matrix=tier2a_duration_matrix,
-                vehicle_id_offset=vehicle_id_offset,  # Pass offset for unique IDs
-                config=self.config,  # Pass config for optimized solver settings
+                orders=orders,
+                fleet=fleet,
+                depot=hub_config.hub,  # Use hub as depot
+                distance_matrix=distance_matrix,
+                duration_matrix=duration_matrix,
+                vehicle_id_offset=vehicle_offset,
+                config=self.config,
             )
 
-            solution = solver.solve(
-                optimization_strategy="balanced",
-                time_limit=time_limit,
-            )
+            solution = solver.solve("balanced", time_limit)
 
-            # Set source to HUB and add HUB- prefix to vehicle names
+            # Mark routes as originating from this hub
             for route in solution.routes:
-                route.source = "HUB"
-                route.trip_number = 1
-                route.vehicle.name = f"HUB-{route.vehicle.name}"
+                route.source = hub_id
+                route.vehicle.name = f"{hub_id.upper()}-{route.vehicle.name}"
 
-            print(f"[Tier 2a] ✅ {len(solution.routes)} Motor routes from HUB created")
-            print(f"[Tier 2a]   Delivered: {solution.total_orders_delivered} hub-zone orders")
+            print(f"[Tier 2-{hub_id}] {len(solution.routes)} routes, {solution.total_orders_delivered} orders delivered")
             if solution.unassigned_orders:
-                print(f"[Tier 2a]   ⚠️ Unassigned: {len(solution.unassigned_orders)} orders")
+                print(f"[Tier 2-{hub_id}] Warning: {len(solution.unassigned_orders)} unassigned orders")
 
             return solution.routes, solution.unassigned_orders
 
         except Exception as e:
-            print(f"[Tier 2a] Error solving Motors from HUB: {str(e)}")
+            print(f"[Tier 2-{hub_id}] Error: {str(e)}")
             import traceback
             traceback.print_exc()
-            return [], []
+            return [], orders
 
-    def _solve_tier2b_depot(self, time_limit: int, vehicle_id_offset: int, allocated_fleet: VehicleFleet) -> Tuple[List[Route], List[Order]]:
+    def _solve_tier2_from_depot(
+        self,
+        orders: List[Order],
+        fleet: VehicleFleet,
+        time_limit: int,
+        vehicle_offset: int
+    ) -> Tuple[List[Route], List[Order]]:
         """
-        Solve Tier 2b: Motor distribution FROM DEPOT for direct-zone orders.
-
-        Motors deliver direct-zone orders starting from DEPOT.
-        Location indices: 0=DEPOT, 1+=direct-zone-customers
+        Solve motor routing from DEPOT for direct orders.
 
         Args:
+            orders: Direct orders to deliver from DEPOT
+            fleet: Allocated fleet for DEPOT
             time_limit: Time limit in seconds
-            vehicle_id_offset: Starting vehicle ID offset (continues from Tier 2a)
-            allocated_fleet: Pre-allocated fleet for DEPOT routes (from smart allocation)
+            vehicle_offset: Vehicle ID offset
 
         Returns:
             Tuple of (routes, unassigned_orders)
         """
-        if not self.direct_orders:
-            print("[Tier 2b] No direct-zone orders, Motors from DEPOT not needed")
-            return [], []
+        # Build sub-matrix: [DEPOT, orders...]
+        order_indices = []
+        for order in orders:
+            try:
+                order_idx = self.orders.index(order)
+                order_indices.append(self.index_manager.get_customer_index(order_idx))
+            except ValueError:
+                continue
 
-        # Create distance matrix for direct-zone orders with DEPOT as depot
-        # Get indices of direct-zone customers in full matrix
-        direct_customer_indices = [i + 2 for i, order in enumerate(self.orders) if order in self.direct_orders]
+        all_indices = [self.index_manager.get_depot_index()] + order_indices
 
-        # Build custom distance matrix: [DEPOT, direct_customer_1, direct_customer_2, ...]
-        all_indices = [0] + direct_customer_indices
-        n = len(all_indices)
+        distance_matrix = self._extract_submatrix(self.full_distance_matrix, all_indices)
+        duration_matrix = self._extract_submatrix(self.full_duration_matrix, all_indices)
 
-        tier2b_distance_matrix = np.zeros((n, n))
-        tier2b_duration_matrix = np.zeros((n, n))
-
-        for i, idx1 in enumerate(all_indices):
-            for j, idx2 in enumerate(all_indices):
-                tier2b_distance_matrix[i, j] = self.full_distance_matrix[idx1, idx2]
-                tier2b_duration_matrix[i, j] = self.full_duration_matrix[idx1, idx2]
-
-        # Solve with direct-zone orders, using DEPOT as depot
         try:
             solver = VRPSolver(
-                orders=self.direct_orders,  # Direct-zone orders
-                fleet=allocated_fleet,  # Use allocated fleet from smart allocation
-                depot=self.depot,  # Use DEPOT as depot
-                distance_matrix=tier2b_distance_matrix,
-                duration_matrix=tier2b_duration_matrix,
-                vehicle_id_offset=vehicle_id_offset,  # Pass offset for unique IDs
-                config=self.config,  # Pass config for optimized solver settings
+                orders=orders,
+                fleet=fleet,
+                depot=self.depot,
+                distance_matrix=distance_matrix,
+                duration_matrix=duration_matrix,
+                vehicle_id_offset=vehicle_offset,
+                config=self.config,
             )
 
-            solution = solver.solve(
-                optimization_strategy="balanced",
-                time_limit=time_limit,
-            )
+            solution = solver.solve("balanced", time_limit)
 
-            # Set source to DEPOT and add DEPOT- prefix to vehicle names
+            # Mark routes as from DEPOT
             for route in solution.routes:
                 route.source = "DEPOT"
-                route.trip_number = 1
                 route.vehicle.name = f"DEPOT-{route.vehicle.name}"
 
-            print(f"[Tier 2b] ✅ {len(solution.routes)} Motor routes from DEPOT created")
-            print(f"[Tier 2b]   Delivered: {solution.total_orders_delivered} direct-zone orders")
+            print(f"[Tier 2-DEPOT] {len(solution.routes)} routes, {solution.total_orders_delivered} orders delivered")
             if solution.unassigned_orders:
-                print(f"[Tier 2b]   ⚠️ Unassigned: {len(solution.unassigned_orders)} orders")
+                print(f"[Tier 2-DEPOT] Warning: {len(solution.unassigned_orders)} unassigned orders")
 
             return solution.routes, solution.unassigned_orders
 
         except Exception as e:
-            print(f"[Tier 2b] Error solving Motors from DEPOT: {str(e)}")
+            print(f"[Tier 2-DEPOT] Error: {str(e)}")
             import traceback
             traceback.print_exc()
-            return [], []
+            return [], orders
 
-    def _allocate_vehicles_smartly(self) -> Tuple[VehicleFleet, VehicleFleet]:
+    def _allocate_vehicles_to_sources(self) -> Dict[str, VehicleFleet]:
         """
-        Intelligently allocate global vehicle pool between HUB and DEPOT.
-
-        Splits vehicles proportionally based on weight, with smart matching:
-        - Larger capacity vehicles → zones with heavier demand
-        - Unlimited vehicles (motors) → split proportionally by weight
+        Allocate vehicles proportionally across sources based on weight.
 
         Returns:
-            Tuple of (hub_fleet, depot_fleet) with allocated vehicles
+            Dict mapping source_id to VehicleFleet
         """
         from ..models.vehicle import VehicleFleet as VF
 
-        # Calculate weight ratio
-        hub_weight = sum(o.load_weight_in_kg for o in self.hub_orders) if self.hub_orders else 0
-        direct_weight = sum(o.load_weight_in_kg for o in self.direct_orders) if self.direct_orders else 0
-        total_weight = hub_weight + direct_weight
+        # Calculate weights per source
+        source_weights = {}
+        total_weight = 0.0
+        for source_id, orders in self.classified_orders.items():
+            weight = sum(o.load_weight_in_kg for o in orders)
+            source_weights[source_id] = weight
+            total_weight += weight
 
         if total_weight == 0:
-            raise TwoTierRoutingError("No orders to route")
-
-        hub_ratio = hub_weight / total_weight
-        depot_ratio = direct_weight / total_weight
-
-        print(f"[Vehicle Allocation] HUB: {hub_weight:.1f}kg ({hub_ratio*100:.1f}%), DEPOT: {direct_weight:.1f}kg ({depot_ratio*100:.1f}%)")
+            return {}
 
         # Get motor vehicles (exclude Blind Van)
-        motor_vehicles = [(v, count, unlimited) for v, count, unlimited in self.fleet.vehicle_types if v.name != "Blind Van"]
+        motor_vehicles = [
+            (v, count, unlimited)
+            for v, count, unlimited in self.fleet.vehicle_types
+            if v.name != self.hub_config.blind_van_vehicle_name
+        ]
 
-        if not motor_vehicles:
-            raise TwoTierRoutingError("No motor vehicles found in fleet")
+        print(f"\n[Vehicle Allocation] Total weight: {total_weight:.1f} kg across {len(source_weights)} sources")
 
-        # Separate fixed and unlimited vehicles
-        fixed_vehicles = [(v, count) for v, count, unlimited in motor_vehicles if not unlimited]
-        unlimited_vehicles = [(v, count) for v, count, unlimited in motor_vehicles if unlimited]
+        # Allocate proportionally
+        allocations = {}
+        for source_id, weight in source_weights.items():
+            if not self.classified_orders.get(source_id):
+                continue
 
-        # Sort fixed vehicles by capacity (largest first) for smart allocation
-        fixed_vehicles.sort(key=lambda x: x[0].capacity, reverse=True)
+            ratio = weight / total_weight if total_weight > 0 else 0
+            source_allocation = []
 
-        hub_allocation = []
-        depot_allocation = []
+            for vehicle, count, unlimited in motor_vehicles:
+                if unlimited:
+                    source_allocation.append((vehicle, 50, True))
+                else:
+                    allocated_count = max(1, round(count * ratio)) if weight > 0 else 0
+                    if allocated_count > 0:
+                        source_allocation.append((vehicle, allocated_count, False))
 
-        # Smart allocation of fixed vehicles
-        for vehicle_type, total_count in fixed_vehicles:
-            # If only one zone has orders, allocate all to that zone
-            if hub_weight == 0:
-                depot_allocation.append((vehicle_type, total_count, False))
-                print(f"[Vehicle Allocation]   {vehicle_type.name}: 0 → HUB, {total_count} → DEPOT (no HUB demand)")
-            elif direct_weight == 0:
-                hub_allocation.append((vehicle_type, total_count, False))
-                print(f"[Vehicle Allocation]   {vehicle_type.name}: {total_count} → HUB, 0 → DEPOT (no DEPOT demand)")
-            else:
-                # Calculate proportional split
-                hub_count = round(total_count * hub_ratio)
-                depot_count = total_count - hub_count
+            if source_allocation:
+                allocations[source_id] = VF(
+                    vehicle_types=source_allocation,
+                    return_to_depot=self.fleet.return_to_depot,
+                    priority_time_tolerance=self.fleet.priority_time_tolerance,
+                    non_priority_time_tolerance=self.fleet.non_priority_time_tolerance,
+                    multiple_trips=self.fleet.multiple_trips,
+                    relax_time_windows=getattr(self.fleet, 'relax_time_windows', False),
+                    time_window_relaxation_minutes=getattr(self.fleet, 'time_window_relaxation_minutes', 0),
+                )
 
-                # Ensure at least one vehicle for each zone if possible and needed
-                if hub_count == 0 and total_count > 0 and hub_weight > 0:
-                    hub_count = 1
-                    depot_count = total_count - 1
-                elif depot_count == 0 and total_count > 0 and direct_weight > 0:
-                    depot_count = 1
-                    hub_count = total_count - 1
+                source_name = source_id if source_id == "DEPOT" else self.hub_config.get_hub_by_id(source_id).hub.name
+                print(f"  {source_name}: {ratio*100:.1f}% ({weight:.1f} kg)")
 
-                if hub_count > 0:
-                    hub_allocation.append((vehicle_type, hub_count, False))
-                if depot_count > 0:
-                    depot_allocation.append((vehicle_type, depot_count, False))
+        return allocations
 
-                print(f"[Vehicle Allocation]   {vehicle_type.name}: {hub_count} → HUB, {depot_count} → DEPOT")
+    def _extract_submatrix(self, matrix: np.ndarray, indices: List[int]) -> np.ndarray:
+        """
+        Extract sub-matrix from full matrix using given indices.
 
-        # Allocate unlimited vehicles proportionally
-        for vehicle_type, _ in unlimited_vehicles:
-            # Unlimited vehicles are available to both zones
-            hub_allocation.append((vehicle_type, 50, True))  # Keep unlimited flag
-            depot_allocation.append((vehicle_type, 50, True))
-            print(f"[Vehicle Allocation]   {vehicle_type.name}: unlimited → HUB, unlimited → DEPOT")
+        Args:
+            matrix: Full distance/duration matrix
+            indices: List of indices to extract
 
-        # Create fleets with allocated vehicles
-        if not hub_allocation:
-            hub_allocation = [(fixed_vehicles[0][0], 0, False)] if fixed_vehicles else []
-        if not depot_allocation:
-            depot_allocation = [(fixed_vehicles[0][0], 0, False)] if fixed_vehicles else []
+        Returns:
+            Sub-matrix of shape (len(indices), len(indices))
+        """
+        n = len(indices)
+        submatrix = np.zeros((n, n))
+        for i, idx1 in enumerate(indices):
+            for j, idx2 in enumerate(indices):
+                submatrix[i, j] = matrix[idx1, idx2]
+        return submatrix
 
-        hub_fleet = VF(
-            vehicle_types=hub_allocation,
-            return_to_depot=self.fleet.return_to_depot,
-            priority_time_tolerance=self.fleet.priority_time_tolerance,
-            non_priority_time_tolerance=self.fleet.non_priority_time_tolerance,
-            multiple_trips=self.fleet.multiple_trips,
-            relax_time_windows=self.fleet.relax_time_windows,
-            time_window_relaxation_minutes=self.fleet.time_window_relaxation_minutes,
-        )
-
-        depot_fleet = VF(
-            vehicle_types=depot_allocation,
-            return_to_depot=self.fleet.return_to_depot,
-            priority_time_tolerance=self.fleet.priority_time_tolerance,
-            non_priority_time_tolerance=self.fleet.non_priority_time_tolerance,
-            multiple_trips=self.fleet.multiple_trips,
-            relax_time_windows=self.fleet.relax_time_windows,
-            time_window_relaxation_minutes=self.fleet.time_window_relaxation_minutes,
-        )
-
-        return hub_fleet, depot_fleet
+    def _get_blind_van_vehicle(self) -> Optional[Vehicle]:
+        """Get Blind Van vehicle from fleet."""
+        for vehicle_type, count, unlimited in self.fleet.vehicle_types:
+            if vehicle_type.name == self.hub_config.blind_van_vehicle_name:
+                return vehicle_type
+        return None
 
     def get_routing_summary(self) -> Dict:
         """Get hub routing classification summary."""
-        return self.hub_manager.get_hub_routing_summary(self.orders)
+        return self.hub_manager.get_routing_summary(self.orders)
+
+
+# Backward compatibility alias
+TwoTierVRPSolver = MultiHubVRPSolver
