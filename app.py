@@ -23,6 +23,7 @@ load_dotenv()
 # Import project modules
 from src.models.location import Depot, Location, Hub
 from src.models.order import Order
+from src.models.vehicle import Vehicle, VehicleFleet
 from src.models.hub_config import MultiHubConfig, HubConfig
 from src.utils.csv_parser import CSVParser
 from src.utils.yaml_parser import YAMLParser
@@ -111,6 +112,8 @@ def initialize_session_state():
         st.session_state.hub_routing_manager = None  # MultiHubRoutingManager
     if 'map_html_cache' not in st.session_state:
         st.session_state.map_html_cache = {}  # Cache map HTML by route filter
+    if 'rate_overrides' not in st.session_state:
+        st.session_state.rate_overrides = {}  # {vehicle_name: rate_per_km}
 
 
 def get_depot_from_env():
@@ -374,6 +377,45 @@ def render_configuration_section():
     return optimization_strategy, time_limit
 
 
+def apply_rate_overrides(fleet: VehicleFleet, rate_overrides: dict) -> VehicleFleet:
+    """
+    Create a new VehicleFleet with overridden cost_per_km values.
+
+    Args:
+        fleet: Original VehicleFleet
+        rate_overrides: Dict of {vehicle_name: new_rate}
+
+    Returns:
+        New VehicleFleet with updated rates
+    """
+    if not rate_overrides:
+        return fleet
+
+    new_vehicle_types = []
+    for vehicle_type, count, unlimited in fleet.vehicle_types:
+        new_rate = rate_overrides.get(vehicle_type.name, vehicle_type.cost_per_km)
+
+        # Create new Vehicle with overridden rate
+        new_vehicle = Vehicle(
+            name=vehicle_type.name,
+            capacity=vehicle_type.capacity,
+            cost_per_km=new_rate,
+            fixed_cost=new_rate * 10,  # Match calculation from yaml_parser.py
+        )
+        new_vehicle_types.append((new_vehicle, count, unlimited))
+
+    # Create new fleet with same settings but updated vehicles
+    return VehicleFleet(
+        vehicle_types=new_vehicle_types,
+        return_to_depot=fleet.return_to_depot,
+        priority_time_tolerance=fleet.priority_time_tolerance,
+        non_priority_time_tolerance=fleet.non_priority_time_tolerance,
+        multiple_trips=fleet.multiple_trips,
+        relax_time_windows=fleet.relax_time_windows,
+        time_window_relaxation_minutes=fleet.time_window_relaxation_minutes,
+    )
+
+
 def render_processing_section(optimization_strategy, time_limit):
     """Render the processing section with generate button"""
     st.header("🔄 3. Generate Routes")
@@ -404,6 +446,10 @@ def render_processing_section(optimization_strategy, time_limit):
             fleet = st.session_state.fleet
             depot = st.session_state.depot
             hubs_config = st.session_state.hubs_config
+
+            # Apply rate overrides if configured
+            if st.session_state.get('rate_overrides'):
+                fleet = apply_rate_overrides(fleet, st.session_state.rate_overrides)
 
             # Create MultiHubRoutingManager
             hub_routing_manager = MultiHubRoutingManager(hubs_config, depot)
@@ -1081,6 +1127,40 @@ def render_sidebar():
             )
             st.session_state.priority_tolerance = priority_tolerance
             st.session_state.non_priority_tolerance = non_priority_tolerance
+
+        # Rate per KM configuration
+        with st.expander("💰 Rate per KM", expanded=False):
+            st.write("Configure delivery rate per kilometer:")
+
+            if st.session_state.fleet is not None:
+                # Initialize rate_overrides from fleet defaults if empty
+                if not st.session_state.rate_overrides:
+                    for vehicle_type, count, unlimited in st.session_state.fleet.vehicle_types:
+                        st.session_state.rate_overrides[vehicle_type.name] = vehicle_type.cost_per_km
+
+                # Create input for each vehicle type
+                for vehicle_type, count, unlimited in st.session_state.fleet.vehicle_types:
+                    default_rate = vehicle_type.cost_per_km
+                    current_rate = st.session_state.rate_overrides.get(vehicle_type.name, default_rate)
+
+                    new_rate = st.number_input(
+                        f"{vehicle_type.name} (Rp/km)",
+                        min_value=0,
+                        max_value=100000,
+                        value=int(current_rate),
+                        step=500,
+                        key=f"rate_{vehicle_type.name}",
+                        help=f"Default: Rp {default_rate:,.0f}/km"
+                    )
+                    st.session_state.rate_overrides[vehicle_type.name] = float(new_rate)
+
+                # Reset button
+                if st.button("🔄 Reset to Default", key="reset_rates"):
+                    for vehicle_type, count, unlimited in st.session_state.fleet.vehicle_types:
+                        st.session_state.rate_overrides[vehicle_type.name] = vehicle_type.cost_per_km
+                    st.rerun()
+            else:
+                st.info("📋 Upload vehicle configuration to set rates")
 
         # Debug mode configuration
         with st.expander("🐛 Debug Mode", expanded=False):
