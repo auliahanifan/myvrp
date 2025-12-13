@@ -94,7 +94,16 @@ def initialize_session_state():
     if 'orders' not in st.session_state:
         st.session_state.orders = None
     if 'fleet' not in st.session_state:
-        st.session_state.fleet = None
+        # Auto-load default fleet from conf.yaml
+        default_yaml_path = "conf.yaml"
+        if os.path.exists(default_yaml_path):
+            try:
+                parser = YAMLParser(default_yaml_path)
+                st.session_state.fleet = parser.parse()
+            except Exception:
+                st.session_state.fleet = None
+        else:
+            st.session_state.fleet = None
     if 'solution' not in st.session_state:
         st.session_state.solution = None
     if 'excel_path' not in st.session_state:
@@ -112,10 +121,32 @@ def initialize_session_state():
         st.session_state.hub_routing_manager = None  # MultiHubRoutingManager
     if 'map_html_cache' not in st.session_state:
         st.session_state.map_html_cache = {}  # Cache map HTML by route filter
-    if 'rate_overrides' not in st.session_state:
-        st.session_state.rate_overrides = {}  # {vehicle_name: rate_per_km} - legacy, kept for compatibility
     if 'vehicle_config' not in st.session_state:
-        st.session_state.vehicle_config = None  # Editable config dict for full vehicle configuration
+        # Auto-initialize from fleet if available
+        if st.session_state.fleet is not None:
+            fleet = st.session_state.fleet
+            st.session_state.vehicle_config = {
+                'vehicles': [
+                    {
+                        'name': v.name,
+                        'capacity': v.capacity,
+                        'cost_per_km': v.cost_per_km,
+                        'fixed_count': count,
+                        'unlimited': unlimited
+                    }
+                    for v, count, unlimited in fleet.vehicle_types
+                ],
+                'routing': {
+                    'return_to_depot': fleet.return_to_depot,
+                    'priority_time_tolerance': fleet.priority_time_tolerance,
+                    'non_priority_time_tolerance': fleet.non_priority_time_tolerance,
+                    'multiple_trips': fleet.multiple_trips,
+                    'relax_time_windows': fleet.relax_time_windows,
+                    'time_window_relaxation_minutes': fleet.time_window_relaxation_minutes,
+                }
+            }
+        else:
+            st.session_state.vehicle_config = None
     if 'config_modified' not in st.session_state:
         st.session_state.config_modified = False  # Track if config has been modified from default
 
@@ -213,122 +244,221 @@ def render_upload_section():
                 st.session_state.orders = None
 
     with col2:
-        st.subheader("Vehicle Configuration YAML")
+        st.subheader("Vehicle Configuration")
 
-        # Option to use default or upload custom
-        use_default = st.checkbox("Gunakan konfigurasi vehicle default", value=True)
+        # Check if config is loaded
+        if st.session_state.vehicle_config is None:
+            st.error("Failed to load vehicle configuration from conf.yaml")
+            return
 
-        if use_default:
-            default_yaml_path = "conf.yaml"
-            if os.path.exists(default_yaml_path):
-                try:
-                    parser = YAMLParser(default_yaml_path)
-                    fleet = parser.parse()
-                    st.session_state.fleet = fleet
+        config = st.session_state.vehicle_config
 
-                    st.markdown(
-                        f'<div class="success-box">✅ Menggunakan konfigurasi default</div>',
-                        unsafe_allow_html=True
+        # Vehicle types editor
+        st.markdown("**Tipe Kendaraan**")
+
+        vehicles_to_remove = []
+        for idx, v_cfg in enumerate(config['vehicles']):
+            with st.container():
+                # Vehicle header with remove button
+                header_cols = st.columns([4, 1])
+                with header_cols[0]:
+                    # Editable vehicle name
+                    new_name = st.text_input(
+                        "Nama",
+                        value=v_cfg['name'],
+                        key=f"vehicle_name_{idx}",
+                        label_visibility="collapsed",
+                        placeholder="Vehicle name"
                     )
+                    if new_name != v_cfg['name']:
+                        config['vehicles'][idx]['name'] = new_name
+                        st.session_state.config_modified = True
 
-                    # Display vehicle types (use vehicle_config if available)
-                    st.subheader("Tipe Kendaraan")
-                    if st.session_state.vehicle_config is not None:
-                        st.caption("📝 Configuration editable in sidebar → 🚗 Vehicle Fleet")
-                        config = st.session_state.vehicle_config
-                        for v_cfg in config['vehicles']:
-                            unlimited_str = " (+ unlimited on-demand)" if v_cfg.get('unlimited', False) else ""
-                            st.write(f"**{v_cfg['name']}**: {v_cfg['capacity']} kg @ Rp {v_cfg['cost_per_km']:,.0f}/km × {v_cfg['fixed_count']} unit{unlimited_str}")
-                        total_vehicles = sum(v['fixed_count'] for v in config['vehicles'])
-                        st.write(f"**Total fixed vehicles**: {total_vehicles} units")
-                        routing = config.get('routing', {})
-                        st.subheader("Routing Configuration")
-                        st.write(f"**Return to depot**: {'Yes' if routing.get('return_to_depot', True) else 'No'}")
-                        st.write(f"**Priority time tolerance**: {routing.get('priority_time_tolerance', 0)} min")
-                        st.write(f"**Non-priority time tolerance**: {routing.get('non_priority_time_tolerance', 60)} min")
-                        st.write(f"**Multiple trips**: {'Yes' if routing.get('multiple_trips', True) else 'No'}")
-                    else:
-                        for vehicle_type, count, unlimited in fleet.vehicle_types:
-                            unlimited_str = " (+ unlimited on-demand)" if unlimited else ""
-                            st.write(f"**{vehicle_type.name}**: {vehicle_type.capacity} kg @ Rp {vehicle_type.cost_per_km:,}/km × {count} unit{unlimited_str}")
+                with header_cols[1]:
+                    if st.button("X", key=f"remove_vehicle_{idx}", help="Remove this vehicle type"):
+                        vehicles_to_remove.append(idx)
 
-                        st.write(f"**Total fixed vehicles**: {fleet.get_max_vehicles()} units")
+                # Vehicle properties in columns
+                prop_cols = st.columns(4)
 
-                        # Display routing config
-                        st.subheader("Routing Configuration")
-                        st.write(f"**Return to depot**: {'Yes' if fleet.return_to_depot else 'No'}")
-                        st.write(f"**Priority time tolerance**: {fleet.priority_time_tolerance} min")
-                        st.write(f"**Non-priority time tolerance**: {fleet.non_priority_time_tolerance} min")
-                        st.write(f"**Multiple trips**: {'Yes' if fleet.multiple_trips else 'No'}")
-
-                except Exception as e:
-                    st.markdown(
-                        f'<div class="error-box">❌ Error loading default config: {str(e)}</div>',
-                        unsafe_allow_html=True
+                with prop_cols[0]:
+                    new_capacity = st.number_input(
+                        "Capacity (kg)",
+                        min_value=1.0,
+                        max_value=10000.0,
+                        value=float(v_cfg['capacity']),
+                        step=10.0,
+                        key=f"vehicle_capacity_{idx}"
                     )
-        else:
-            yaml_file = st.file_uploader(
-                "Upload file YAML konfigurasi vehicle",
-                type=['yaml', 'yml'],
-                help="Format YAML dengan vehicles list (name, capacity, cost_per_km)"
+                    if new_capacity != v_cfg['capacity']:
+                        config['vehicles'][idx]['capacity'] = new_capacity
+                        st.session_state.config_modified = True
+
+                with prop_cols[1]:
+                    new_rate = st.number_input(
+                        "Rate (Rp/km)",
+                        min_value=0.0,
+                        max_value=1000000.0,
+                        value=float(v_cfg['cost_per_km']),
+                        step=100.0,
+                        key=f"vehicle_rate_{idx}"
+                    )
+                    if new_rate != v_cfg['cost_per_km']:
+                        config['vehicles'][idx]['cost_per_km'] = new_rate
+                        st.session_state.config_modified = True
+
+                with prop_cols[2]:
+                    new_count = st.number_input(
+                        "Count",
+                        min_value=1,
+                        max_value=1000,
+                        value=int(v_cfg['fixed_count']),
+                        step=1,
+                        key=f"vehicle_count_{idx}"
+                    )
+                    if new_count != v_cfg['fixed_count']:
+                        config['vehicles'][idx]['fixed_count'] = new_count
+                        st.session_state.config_modified = True
+
+                with prop_cols[3]:
+                    new_unlimited = st.checkbox(
+                        "Unlimited",
+                        value=v_cfg.get('unlimited', False),
+                        key=f"vehicle_unlimited_{idx}",
+                        help="Allow unlimited on-demand vehicles"
+                    )
+                    if new_unlimited != v_cfg.get('unlimited', False):
+                        config['vehicles'][idx]['unlimited'] = new_unlimited
+                        st.session_state.config_modified = True
+
+                st.divider()
+
+        # Remove vehicles marked for deletion
+        if vehicles_to_remove:
+            for idx in sorted(vehicles_to_remove, reverse=True):
+                if len(config['vehicles']) > 1:  # Keep at least one vehicle
+                    config['vehicles'].pop(idx)
+                    st.session_state.config_modified = True
+            st.rerun()
+
+        # Add new vehicle button
+        if st.button("+ Add Vehicle Type", key="add_vehicle"):
+            config['vehicles'].append({
+                'name': f"New Vehicle {len(config['vehicles']) + 1}",
+                'capacity': 100.0,
+                'cost_per_km': 2000.0,
+                'fixed_count': 1,
+                'unlimited': False
+            })
+            st.session_state.config_modified = True
+            st.rerun()
+
+        # Summary
+        total_vehicles = sum(v['fixed_count'] for v in config['vehicles'])
+        st.caption(f"Total fixed vehicles: {total_vehicles} units")
+
+        # Routing settings
+        st.markdown("---")
+        st.markdown("**Routing Settings**")
+
+        routing = config.get('routing', {})
+
+        routing_cols = st.columns(2)
+
+        with routing_cols[0]:
+            new_return_depot = st.checkbox(
+                "Return to depot",
+                value=routing.get('return_to_depot', True),
+                key="routing_return_depot",
+                help="Vehicles must return to depot after deliveries"
             )
+            if new_return_depot != routing.get('return_to_depot', True):
+                routing['return_to_depot'] = new_return_depot
+                st.session_state.config_modified = True
 
-            if yaml_file is not None:
+            new_multiple_trips = st.checkbox(
+                "Multiple trips",
+                value=routing.get('multiple_trips', True),
+                key="routing_multiple_trips",
+                help="Allow vehicles to make multiple trips"
+            )
+            if new_multiple_trips != routing.get('multiple_trips', True):
+                routing['multiple_trips'] = new_multiple_trips
+                st.session_state.config_modified = True
+
+        with routing_cols[1]:
+            new_priority_tol = st.number_input(
+                "Priority time tolerance (min)",
+                min_value=0,
+                max_value=120,
+                value=routing.get('priority_time_tolerance', 0),
+                step=5,
+                key="routing_priority_tolerance",
+                help="Time flexibility for priority orders"
+            )
+            if new_priority_tol != routing.get('priority_time_tolerance', 0):
+                routing['priority_time_tolerance'] = new_priority_tol
+                st.session_state.config_modified = True
+
+            new_non_priority_tol = st.number_input(
+                "Non-priority tolerance (min)",
+                min_value=0,
+                max_value=180,
+                value=routing.get('non_priority_time_tolerance', 60),
+                step=5,
+                key="routing_non_priority_tolerance",
+                help="Time flexibility for non-priority orders"
+            )
+            if new_non_priority_tol != routing.get('non_priority_time_tolerance', 60):
+                routing['non_priority_time_tolerance'] = new_non_priority_tol
+                st.session_state.config_modified = True
+
+        # Relax time windows option
+        new_relax = st.checkbox(
+            "Relax time windows",
+            value=routing.get('relax_time_windows', False),
+            key="routing_relax_windows",
+            help="Relax time window constraints if solver has difficulty"
+        )
+        if new_relax != routing.get('relax_time_windows', False):
+            routing['relax_time_windows'] = new_relax
+            st.session_state.config_modified = True
+
+        if routing.get('relax_time_windows', False):
+            new_relax_min = st.number_input(
+                "Relaxation (minutes)",
+                min_value=0,
+                max_value=120,
+                value=routing.get('time_window_relaxation_minutes', 15),
+                step=5,
+                key="routing_relax_minutes"
+            )
+            if new_relax_min != routing.get('time_window_relaxation_minutes', 15):
+                routing['time_window_relaxation_minutes'] = new_relax_min
+                st.session_state.config_modified = True
+
+        config['routing'] = routing
+
+        # Reset and status
+        st.markdown("---")
+        action_cols = st.columns(2)
+
+        with action_cols[0]:
+            if st.session_state.config_modified:
+                st.caption("Configuration modified")
+
+        with action_cols[1]:
+            if st.button("Reset to Defaults", key="reset_config"):
+                # Reload from conf.yaml
                 try:
-                    # Save to temporary file
-                    with tempfile.NamedTemporaryFile(delete=False, suffix='.yaml', mode='wb') as tmp_file:
-                        tmp_file.write(yaml_file.getvalue())
-                        tmp_path = tmp_file.name
-
-                    # Parse YAML
-                    parser = YAMLParser(tmp_path)
+                    parser = YAMLParser("conf.yaml")
                     fleet = parser.parse()
                     st.session_state.fleet = fleet
-
-                    # Clean up temp file
-                    os.unlink(tmp_path)
-
-                    st.markdown(
-                        '<div class="success-box">✅ Konfigurasi vehicle berhasil dimuat</div>',
-                        unsafe_allow_html=True
-                    )
-
-                    # Display vehicle types (use vehicle_config if available)
-                    st.subheader("Tipe Kendaraan")
-                    if st.session_state.vehicle_config is not None:
-                        st.caption("📝 Configuration editable in sidebar → 🚗 Vehicle Fleet")
-                        config = st.session_state.vehicle_config
-                        for v_cfg in config['vehicles']:
-                            unlimited_str = " (+ unlimited on-demand)" if v_cfg.get('unlimited', False) else ""
-                            st.write(f"**{v_cfg['name']}**: {v_cfg['capacity']} kg @ Rp {v_cfg['cost_per_km']:,.0f}/km × {v_cfg['fixed_count']} unit{unlimited_str}")
-                        total_vehicles = sum(v['fixed_count'] for v in config['vehicles'])
-                        st.write(f"**Total fixed vehicles**: {total_vehicles} units")
-                        routing = config.get('routing', {})
-                        st.subheader("Routing Configuration")
-                        st.write(f"**Return to depot**: {'Yes' if routing.get('return_to_depot', True) else 'No'}")
-                        st.write(f"**Priority time tolerance**: {routing.get('priority_time_tolerance', 0)} min")
-                        st.write(f"**Non-priority time tolerance**: {routing.get('non_priority_time_tolerance', 60)} min")
-                        st.write(f"**Multiple trips**: {'Yes' if routing.get('multiple_trips', True) else 'No'}")
-                    else:
-                        for vehicle_type, count, unlimited in fleet.vehicle_types:
-                            unlimited_str = " (+ unlimited on-demand)" if unlimited else ""
-                            st.write(f"**{vehicle_type.name}**: {vehicle_type.capacity} kg @ Rp {vehicle_type.cost_per_km:,}/km × {count} unit{unlimited_str}")
-
-                        st.write(f"**Total fixed vehicles**: {fleet.get_max_vehicles()} units")
-
-                        # Display routing config
-                        st.subheader("Routing Configuration")
-                        st.write(f"**Return to depot**: {'Yes' if fleet.return_to_depot else 'No'}")
-                        st.write(f"**Priority time tolerance**: {fleet.priority_time_tolerance} min")
-                        st.write(f"**Non-priority time tolerance**: {fleet.non_priority_time_tolerance} min")
-                        st.write(f"**Multiple trips**: {'Yes' if fleet.multiple_trips else 'No'}")
-
+                    st.session_state.vehicle_config = _fleet_to_config_dict(fleet)
+                    st.session_state.config_modified = False
+                    st.rerun()
                 except Exception as e:
-                    st.markdown(
-                        f'<div class="error-box">❌ Error parsing YAML: {str(e)}</div>',
-                        unsafe_allow_html=True
-                    )
-                    st.session_state.fleet = None
+                    st.error(f"Failed to reset: {str(e)}")
 
 
 def render_configuration_section():
@@ -411,45 +541,6 @@ def render_configuration_section():
     return optimization_strategy, time_limit
 
 
-def apply_rate_overrides(fleet: VehicleFleet, rate_overrides: dict) -> VehicleFleet:
-    """
-    Create a new VehicleFleet with overridden cost_per_km values.
-
-    Args:
-        fleet: Original VehicleFleet
-        rate_overrides: Dict of {vehicle_name: new_rate}
-
-    Returns:
-        New VehicleFleet with updated rates
-    """
-    if not rate_overrides:
-        return fleet
-
-    new_vehicle_types = []
-    for vehicle_type, count, unlimited in fleet.vehicle_types:
-        new_rate = rate_overrides.get(vehicle_type.name, vehicle_type.cost_per_km)
-
-        # Create new Vehicle with overridden rate
-        new_vehicle = Vehicle(
-            name=vehicle_type.name,
-            capacity=vehicle_type.capacity,
-            cost_per_km=new_rate,
-            fixed_cost=new_rate * 10,  # Match calculation from yaml_parser.py
-        )
-        new_vehicle_types.append((new_vehicle, count, unlimited))
-
-    # Create new fleet with same settings but updated vehicles
-    return VehicleFleet(
-        vehicle_types=new_vehicle_types,
-        return_to_depot=fleet.return_to_depot,
-        priority_time_tolerance=fleet.priority_time_tolerance,
-        non_priority_time_tolerance=fleet.non_priority_time_tolerance,
-        multiple_trips=fleet.multiple_trips,
-        relax_time_windows=fleet.relax_time_windows,
-        time_window_relaxation_minutes=fleet.time_window_relaxation_minutes,
-    )
-
-
 def _fleet_to_config_dict(fleet: VehicleFleet) -> dict:
     """Convert VehicleFleet to editable config dictionary."""
     return {
@@ -520,19 +611,11 @@ def apply_config_overrides(fleet: VehicleFleet) -> VehicleFleet:
     """
     Apply user configuration overrides to create a modified fleet.
 
-    Checks vehicle_config first (new system), falls back to rate_overrides (legacy).
-
     Returns:
-        New VehicleFleet with applied overrides
+        New VehicleFleet with applied overrides from vehicle_config
     """
-    # New system: use vehicle_config if present
     if st.session_state.vehicle_config is not None:
         return _config_dict_to_fleet(st.session_state.vehicle_config)
-
-    # Legacy system: rate_overrides only
-    if st.session_state.get('rate_overrides'):
-        return apply_rate_overrides(fleet, st.session_state.rate_overrides)
-
     return fleet
 
 
@@ -1247,181 +1330,37 @@ def render_sidebar():
             st.session_state.priority_tolerance = priority_tolerance
             st.session_state.non_priority_tolerance = non_priority_tolerance
 
-        # Vehicle Fleet Editor
-        with st.expander("🚗 Vehicle Fleet", expanded=False):
-            if st.session_state.fleet is not None:
-                # Initialize vehicle_config from fleet if not set
-                if st.session_state.vehicle_config is None:
-                    st.session_state.vehicle_config = _fleet_to_config_dict(st.session_state.fleet)
-
+        # Vehicle & Routing summary
+        with st.expander("🚗 Vehicle & Routing Summary", expanded=False):
+            if st.session_state.vehicle_config is not None:
                 config = st.session_state.vehicle_config
+                st.caption("Edit in main panel → Vehicle Configuration")
 
-                st.write("**Edit Vehicle Types**")
+                # Show vehicle summary
+                for v_cfg in config['vehicles']:
+                    unlimited_str = " ♾️" if v_cfg.get('unlimited', False) else ""
+                    st.write(f"**{v_cfg['name']}**: {v_cfg['capacity']} kg × {v_cfg['fixed_count']}{unlimited_str}")
 
-                # Track vehicles to remove
-                vehicles_to_remove = []
+                total_vehicles = sum(v['fixed_count'] for v in config['vehicles'])
+                st.write(f"Total: {total_vehicles} vehicles")
 
-                for idx, vehicle_cfg in enumerate(config['vehicles']):
-                    with st.container():
-                        col_name, col_remove = st.columns([4, 1])
-                        with col_name:
-                            st.markdown(f"**{idx+1}. {vehicle_cfg['name']}**")
-                        with col_remove:
-                            if st.button("X", key=f"remove_vehicle_{idx}", help="Remove vehicle type"):
-                                vehicles_to_remove.append(idx)
-
-                        col_cap, col_count, col_rate = st.columns(3)
-
-                        with col_cap:
-                            new_capacity = st.number_input(
-                                "Capacity (kg)",
-                                min_value=1.0,
-                                max_value=5000.0,
-                                value=float(vehicle_cfg['capacity']),
-                                step=10.0,
-                                key=f"capacity_{idx}",
-                                label_visibility="collapsed"
-                            )
-                            st.caption("Capacity (kg)")
-                            vehicle_cfg['capacity'] = new_capacity
-
-                        with col_count:
-                            new_count = st.number_input(
-                                "Count",
-                                min_value=1,
-                                max_value=100,
-                                value=int(vehicle_cfg['fixed_count']),
-                                step=1,
-                                key=f"count_{idx}",
-                                label_visibility="collapsed"
-                            )
-                            st.caption("Units")
-                            vehicle_cfg['fixed_count'] = new_count
-
-                        with col_rate:
-                            new_rate = st.number_input(
-                                "Rate (Rp/km)",
-                                min_value=0,
-                                max_value=100000,
-                                value=int(vehicle_cfg['cost_per_km']),
-                                step=500,
-                                key=f"rate_{idx}",
-                                label_visibility="collapsed"
-                            )
-                            st.caption("Rate (Rp/km)")
-                            vehicle_cfg['cost_per_km'] = float(new_rate)
-
-                        # Unlimited toggle
-                        vehicle_cfg['unlimited'] = st.checkbox(
-                            "Unlimited on-demand",
-                            value=vehicle_cfg.get('unlimited', False),
-                            key=f"unlimited_{idx}"
-                        )
-
-                        st.divider()
-
-                # Handle vehicle removal
-                if vehicles_to_remove:
-                    for idx in reversed(vehicles_to_remove):
-                        config['vehicles'].pop(idx)
-                    st.session_state.config_modified = True
-                    st.rerun()
-
-                # Add new vehicle type
-                st.write("**Add Vehicle Type**")
-                with st.form("add_vehicle_form", clear_on_submit=True):
-                    new_name = st.text_input("Vehicle Name", placeholder="e.g., Pickup Truck")
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        new_cap = st.number_input("Capacity (kg)", min_value=1.0, value=100.0, key="new_cap")
-                    with col2:
-                        new_cnt = st.number_input("Count", min_value=1, value=1, key="new_cnt")
-                    with col3:
-                        new_rt = st.number_input("Rate (Rp/km)", min_value=0, value=3000, key="new_rt")
-
-                    if st.form_submit_button("+ Add Vehicle"):
-                        if new_name.strip():
-                            config['vehicles'].append({
-                                'name': new_name.strip(),
-                                'capacity': new_cap,
-                                'fixed_count': new_cnt,
-                                'cost_per_km': float(new_rt),
-                                'unlimited': False
-                            })
-                            st.session_state.config_modified = True
-                            st.rerun()
-                        else:
-                            st.error("Vehicle name is required")
-
-                # Reset and Export buttons
-                col_reset, col_export = st.columns(2)
-                with col_reset:
-                    if st.button("🔄 Reset", key="reset_vehicle_config", help="Reset to original configuration"):
-                        st.session_state.vehicle_config = _fleet_to_config_dict(st.session_state.fleet)
-                        st.session_state.config_modified = False
-                        st.rerun()
-                with col_export:
-                    import yaml
-                    config_yaml = yaml.dump(st.session_state.vehicle_config, default_flow_style=False, allow_unicode=True)
-                    st.download_button(
-                        label="📥 Export",
-                        data=config_yaml,
-                        file_name="vehicle_config.yaml",
-                        mime="text/yaml",
-                        help="Download current configuration as YAML"
-                    )
-            else:
-                st.info("📋 Upload vehicle configuration to edit fleet")
-
-        # Routing Settings Editor
-        with st.expander("⚙️ Routing Settings", expanded=False):
-            if st.session_state.fleet is not None:
-                # Initialize vehicle_config from fleet if not set
-                if st.session_state.vehicle_config is None:
-                    st.session_state.vehicle_config = _fleet_to_config_dict(st.session_state.fleet)
-
-                config = st.session_state.vehicle_config
+                # Routing summary
                 routing = config.get('routing', {})
+                st.write(f"Return to depot: {'Yes' if routing.get('return_to_depot', True) else 'No'}")
+                st.write(f"Multiple trips: {'Yes' if routing.get('multiple_trips', True) else 'No'}")
 
-                # Return to depot toggle
-                routing['return_to_depot'] = st.checkbox(
-                    "Return to Depot",
-                    value=routing.get('return_to_depot', True),
-                    help="Vehicles must return to depot after deliveries"
+                # Export button
+                import yaml
+                config_yaml = yaml.dump(st.session_state.vehicle_config, default_flow_style=False, allow_unicode=True)
+                st.download_button(
+                    label="📥 Export Config",
+                    data=config_yaml,
+                    file_name="vehicle_config.yaml",
+                    mime="text/yaml",
+                    help="Download current configuration as YAML"
                 )
-
-                # Multiple trips toggle
-                routing['multiple_trips'] = st.checkbox(
-                    "Allow Multiple Trips",
-                    value=routing.get('multiple_trips', True),
-                    help="Vehicles can make multiple trips per day"
-                )
-
-                # Time tolerances (override sidebar time tolerance)
-                st.write("**Time Window Tolerances**")
-                col1, col2 = st.columns(2)
-                with col1:
-                    routing['priority_time_tolerance'] = st.number_input(
-                        "Priority (min)",
-                        min_value=0,
-                        max_value=120,
-                        value=routing.get('priority_time_tolerance', 0),
-                        step=5,
-                        help="Minutes of tolerance for priority orders"
-                    )
-                with col2:
-                    routing['non_priority_time_tolerance'] = st.number_input(
-                        "Non-Priority (min)",
-                        min_value=0,
-                        max_value=180,
-                        value=routing.get('non_priority_time_tolerance', 60),
-                        step=15,
-                        help="Minutes of tolerance for non-priority orders"
-                    )
-
-                config['routing'] = routing
             else:
-                st.info("📋 Upload vehicle configuration to edit routing settings")
+                st.info("Vehicle configuration not loaded")
 
         # Debug mode configuration
         with st.expander("🐛 Debug Mode", expanded=False):
