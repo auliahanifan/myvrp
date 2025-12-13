@@ -14,7 +14,6 @@ from datetime import datetime
 from dotenv import load_dotenv
 import tempfile
 import io
-from streamlit_folium import st_folium
 import streamlit.components.v1 as components
 
 # Load environment variables
@@ -1033,7 +1032,7 @@ def render_results_section():
         - 🚚 Filter by courier to view individual routes
         - 🏭 Red marker = Depot
         """
-        if st.session_state.hub:
+        if st.session_state.hubs_config and not st.session_state.hubs_config.is_zero_hub_mode:
             map_features += "- 📦 Blue marker = Hub (consolidation point)\n"
         map_features += """- ⭐ Orange markers = Priority orders
         - ⚫ Blue markers = Regular orders
@@ -1056,10 +1055,12 @@ def render_results_section():
 
     # Create DataFrame for display
     route_data = []
+    hubs_config = st.session_state.hubs_config
     for route in solution.routes:
         # Set starting location based on route source
-        if route.source == "HUB" and st.session_state.hub:
-            previous_location = st.session_state.hub.name
+        if route.source != "DEPOT" and hubs_config:
+            hub_config = hubs_config.get_hub_by_id(route.source)
+            previous_location = hub_config.hub.name if hub_config else depot.name
         else:
             previous_location = depot.name
 
@@ -1143,22 +1144,24 @@ def render_results_section():
 
     # Note about Blind Van visibility
     if "Blind Van" not in [r.vehicle.name for r in solution.routes]:
-        if st.session_state.hub and st.session_state.hub_config:
+        if st.session_state.hubs_config and not st.session_state.hubs_config.is_zero_hub_mode:
             st.info(
                 "ℹ️ **Blind Van Note:** Blind Van consolidation route will appear when:\n"
                 "1. ✅ Hub is enabled (configured in settings)\n"
-                "2. ✅ There are orders from hub-zones (JAKARTA UTARA, JAKARTA BARAT, TANGERANG, BEKASI UTARA)\n"
+                "2. ✅ There are orders from hub-zones\n"
                 "\nCurrently: No hub-zone orders found, so Blind Van is not needed."
             )
 
     # Add HUB routing summary if hub is enabled
-    if st.session_state.hub and st.session_state.hub_manager:
+    if st.session_state.hubs_config and not st.session_state.hubs_config.is_zero_hub_mode and st.session_state.hub_routing_manager:
         st.markdown("---")
         st.subheader("🎯 Hub Routing Summary")
 
+        # Get all zones that route via any hub
+        all_hub_zones = set(st.session_state.hubs_config.get_zones_to_hub_mapping().keys())
         hub_orders_delivered = len([stop.order for route in solution.routes
                                    for stop in route.stops
-                                   if stop.order and stop.order.kota in st.session_state.hub_config.get("zones_via_hub", [])])
+                                   if stop.order and stop.order.kota and stop.order.kota.upper() in all_hub_zones])
         direct_orders_delivered = solution.total_orders_delivered - hub_orders_delivered
 
         col_hub1, col_hub2, col_hub3 = st.columns(3)
