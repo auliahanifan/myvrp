@@ -157,6 +157,16 @@ class CSVParser:
         if "is_priority" in row and not pd.isna(row["is_priority"]):
             is_priority = self._parse_boolean(row["is_priority"])
 
+        # Parse kelurahan (optional)
+        kelurahan = None
+        if "kelurahan" in row and not pd.isna(row["kelurahan"]):
+            kelurahan = str(row["kelurahan"]).strip()
+
+        # Parse kecamatan (optional)
+        kecamatan = None
+        if "kecamatan" in row and not pd.isna(row["kecamatan"]):
+            kecamatan = str(row["kecamatan"]).strip()
+
         # Parse city (optional)
         kota = None
         if "kota" in row and not pd.isna(row["kota"]):
@@ -172,6 +182,8 @@ class CSVParser:
             display_name=str(row["display_name"]).strip(),
             alamat=str(row["alamat"]).strip(),
             coordinates=coordinates,
+            kelurahan=kelurahan,
+            kecamatan=kecamatan,
             kota=kota,
             is_priority=is_priority,
         )

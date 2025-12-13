@@ -31,6 +31,8 @@ class Order:
     display_name: str
     alamat: str
     coordinates: Tuple[float, float]  # (latitude, longitude)
+    kelurahan: Optional[str] = None
+    kecamatan: Optional[str] = None
     kota: Optional[str] = None
     is_priority: bool = False
 

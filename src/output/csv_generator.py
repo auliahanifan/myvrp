@@ -102,7 +102,9 @@ class CSVGenerator:
             "To",
             "Customer",
             "Address",
-            "City/Zone",
+            "Kelurahan",
+            "Kecamatan",
+            "City",
             "Delivery Time Window",
             "Arrival Time",
             "Departure Time",
@@ -146,7 +148,9 @@ class CSVGenerator:
                         current_location,  # To
                         order.display_name,  # Customer
                         order.alamat,  # Address
-                        order.kota if hasattr(order, 'kota') else "",  # City/Zone
+                        order.kelurahan or "",  # Kelurahan
+                        order.kecamatan or "",  # Kecamatan
+                        order.kota or "",  # City
                         order.delivery_time,  # Delivery time window
                         stop.arrival_time_str,  # Arrival time
                         stop.departure_time_str,  # Departure time
