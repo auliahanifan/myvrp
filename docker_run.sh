@@ -33,6 +33,13 @@ echo "🚀 Running Docker container on host port ${HOST_PORT}..."
 docker run -d \
   --name "${CONTAINER_NAME}" \
   --cpus="1" \
+  --memory="2g" \
+  --restart=unless-stopped \
   -p "${HOST_PORT}:${CONTAINER_PORT}" \
   --env-file .env \
   "${IMAGE_NAME}"
+
+echo ""
+echo "✅ Container started. Waiting for health check..."
+sleep 5
+docker ps --filter "name=${CONTAINER_NAME}" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
