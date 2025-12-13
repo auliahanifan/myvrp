@@ -102,25 +102,26 @@ class ExcelGenerator:
 
         # Define column headers
         headers = [
-            "Source",
-            "Trip #",
-            "Vehicle Name",
-            "Delivery Time",
-            "Customer",
-            "Address",
-            "Kelurahan",
-            "Kecamatan",
-            "City",
-            "Rate (Rp/km)",
-            "Weight (kg)",
-            "Arrival Time",
-            "Departure Time",
-            "Distance (km)",
-            "Cumulative Weight (kg)",
-            "Sequence",
-            "Latitude",
-            "Longitude",
-            "Notes"
+            "Source",                   # 1
+            "Trip #",                   # 2
+            "Vehicle Name",             # 3
+            "Delivery Time",            # 4
+            "Customer",                 # 5
+            "Address",                  # 6
+            "Kelurahan",                # 7
+            "Kecamatan",                # 8
+            "City",                     # 9
+            "Rate (Rp/km)",             # 10
+            "Weight (kg)",              # 11
+            "Arrival Time",             # 12
+            "Departure Time",           # 13
+            "Distance (km)",            # 14
+            "Cost (Rp)",                # 15 (NEW)
+            "Cumulative Weight (kg)",   # 16
+            "Sequence",                 # 17
+            "Latitude",                 # 18
+            "Longitude",                # 19
+            "Notes"                     # 20
         ]
 
         # Write headers
@@ -134,8 +135,8 @@ class ExcelGenerator:
             cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
             cell.border = self._get_border()
 
-        # Set column widths
-        column_widths = [10, 8, 18, 14, 25, 35, 15, 15, 15, 12, 12, 13, 13, 12, 18, 10, 12, 12, 20]
+        # Set column widths (20 columns now)
+        column_widths = [10, 8, 18, 14, 25, 35, 15, 15, 15, 12, 12, 13, 13, 12, 15, 18, 10, 12, 12, 20]
         for col_num, width in enumerate(column_widths, start=1):
             ws.column_dimensions[get_column_letter(col_num)].width = width
 
@@ -179,7 +180,7 @@ class ExcelGenerator:
         """
         order = stop.order
 
-        # Column values
+        # Column values (20 columns)
         values = [
             route.source,  # A: Source (HUB or DEPOT)
             route.trip_number,  # B: Trip #
@@ -190,16 +191,17 @@ class ExcelGenerator:
             order.kelurahan or "",  # G: Kelurahan
             order.kecamatan or "",  # H: Kecamatan
             order.kota or "",  # I: City
-            route.vehicle.cost_per_km,  # J: Rate
-            order.load_weight_in_kg,  # K: Weight
+            route.vehicle.cost_per_km,  # J: Rate (Rp/km)
+            order.load_weight_in_kg,  # K: Weight (kg)
             stop.arrival_time_str,  # L: Arrival Time
             stop.departure_time_str,  # M: Departure Time
-            stop.distance_from_prev,  # N: Distance
-            stop.cumulative_weight,  # O: Cumulative Weight
-            stop.sequence,  # P: Sequence
-            order.coordinates[0],  # Q: Latitude
-            order.coordinates[1],  # R: Longitude
-            "PRIORITY" if order.is_priority else ""  # S: Notes
+            stop.distance_from_prev,  # N: Distance (km)
+            stop.distance_from_prev * route.vehicle.cost_per_km,  # O: Cost (Rp) - NEW
+            stop.cumulative_weight,  # P: Cumulative Weight (kg)
+            stop.sequence,  # Q: Sequence
+            order.coordinates[0],  # R: Latitude
+            order.coordinates[1],  # S: Longitude
+            "PRIORITY" if order.is_priority else ""  # T: Notes
         ]
 
         # Write values
@@ -212,17 +214,19 @@ class ExcelGenerator:
             # Format specific columns
             if col_num == 10:  # Rate - currency
                 cell.number_format = 'Rp #,##0'
-            elif col_num in [11, 14, 15]:  # Weight, Distance, Cumulative Weight - numbers
+            elif col_num == 15:  # Cost - currency (NEW)
+                cell.number_format = 'Rp #,##0'
+            elif col_num in [11, 14, 16]:  # Weight, Distance, Cumulative Weight - numbers
                 cell.number_format = '0.00'
-            elif col_num == 16:  # Sequence - integer
+            elif col_num == 17:  # Sequence - integer
                 cell.number_format = '0'
-            elif col_num in [17, 18]:  # Coordinates - decimal
+            elif col_num in [18, 19]:  # Coordinates - decimal
                 cell.number_format = '0.000000'
 
         # Apply priority color coding
         if order.is_priority:
             fill_color = self.COLOR_PRIORITY_HIGH
-            for col_num in range(1, 20):
+            for col_num in range(1, 21):  # 20 columns
                 ws.cell(row=row, column=col_num).fill = PatternFill(
                     start_color=fill_color,
                     end_color=fill_color,
@@ -256,12 +260,12 @@ class ExcelGenerator:
         ws.cell(row=row, column=14).value = total_distance
         ws.cell(row=row, column=14).number_format = '0.00'
 
-        # Cost calculation (distance × rate)
-        ws.cell(row=row, column=19).value = total_cost
-        ws.cell(row=row, column=19).number_format = 'Rp #,##0'
+        # Cost total (now in column 15 - aligned with "Cost (Rp)" header)
+        ws.cell(row=row, column=15).value = total_cost
+        ws.cell(row=row, column=15).number_format = 'Rp #,##0'
 
         # Apply subtotal formatting
-        for col_num in range(1, 20):
+        for col_num in range(1, 21):  # 20 columns
             cell = ws.cell(row=row, column=col_num)
             cell.fill = PatternFill(start_color=self.COLOR_SUBTOTAL,
                                    end_color=self.COLOR_SUBTOTAL,
