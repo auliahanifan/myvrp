@@ -2,19 +2,67 @@
 Hub configuration models for multi-hub VRP routing.
 
 Supports 0 to N hubs with zone-based routing and nearest hub fallback.
+Supports per-hub blind van modes (Mode A: consolidation only, Mode B: consolidation + delivery).
 """
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import List, Dict, Optional
 
 from .location import Hub
 
 
+class BlindVanMode(Enum):
+    """Blind van operational modes for each hub."""
+    CONSOLIDATION_ONLY = "consolidation_only"  # Mode A: only consolidation, no delivery
+    CONSOLIDATION_WITH_DELIVERY = "consolidation_with_delivery"  # Mode B: consolidation + en-route delivery
+
+
+@dataclass
+class EnRouteDeliveryConfig:
+    """Configuration for en-route delivery (Mode B)."""
+    max_stops: int = 0  # Max delivery stops before reaching hub (0 = disabled)
+    max_detour_minutes: int = 10  # Max time deviation from direct route
+    max_detour_km: float = 5.0  # Max distance deviation from direct route
+    reserve_capacity_kg: float = 100.0  # Reserved capacity for hub consolidation
+
+
+@dataclass
+class HubBlindVanConfig:
+    """Per-hub blind van configuration."""
+    mode: BlindVanMode = BlindVanMode.CONSOLIDATION_ONLY
+    en_route_delivery: Optional[EnRouteDeliveryConfig] = None
+
+    def __post_init__(self):
+        # If mode is Mode B but no en_route_delivery config, create default
+        if self.mode == BlindVanMode.CONSOLIDATION_WITH_DELIVERY and self.en_route_delivery is None:
+            self.en_route_delivery = EnRouteDeliveryConfig()
+
+    @property
+    def is_delivery_enabled(self) -> bool:
+        """Check if en-route delivery is enabled for this hub."""
+        return (
+            self.mode == BlindVanMode.CONSOLIDATION_WITH_DELIVERY and
+            self.en_route_delivery is not None and
+            self.en_route_delivery.max_stops > 0
+        )
+
+
+@dataclass
+class SourceAssignmentConfig:
+    """Configuration for dynamic source assignment."""
+    mode: str = "zone_based"  # "zone_based", "dynamic", "hybrid"
+    min_cost_advantage_percent: float = 10.0  # Switch source only if X% better
+    distance_weight: float = 1.0  # Weight for distance in cost calculation
+    time_weight: float = 0.5  # Weight for travel time in cost calculation
+
+
 @dataclass
 class HubConfig:
-    """Configuration for a single hub with zone mappings."""
+    """Configuration for a single hub with zone mappings and blind van mode."""
     hub: Hub
     hub_id: str
     zones_via_hub: List[str] = field(default_factory=list)
+    blind_van_config: HubBlindVanConfig = field(default_factory=HubBlindVanConfig)
 
     def __post_init__(self):
         # Normalize zones to uppercase
@@ -27,10 +75,12 @@ class MultiHubConfig:
     hubs: List[HubConfig] = field(default_factory=list)
     enabled: bool = False
     blind_van_departure: int = 330  # 05:30 in minutes from midnight
-    blind_van_arrival: int = 360    # 06:00 in minutes from midnight
+    blind_van_arrival: int = 360    # 06:00 in minutes from midnight (hub arrival deadline)
     motor_start_time: int = 360     # 06:00 in minutes from midnight
     unassigned_zone_behavior: str = "nearest"  # "nearest" or "depot"
     blind_van_vehicle_name: str = "Blind Van"
+    blind_van_return_to_depot: bool = False  # If false, blind van can end at last hub
+    source_assignment: SourceAssignmentConfig = field(default_factory=SourceAssignmentConfig)
 
     @property
     def num_hubs(self) -> int:
@@ -68,6 +118,18 @@ class MultiHubConfig:
     def get_all_hubs(self) -> List[Hub]:
         """Get list of all Hub objects."""
         return [h.hub for h in self.hubs]
+
+    def get_hubs_with_delivery(self) -> List[HubConfig]:
+        """Get list of hubs with en-route delivery enabled (Mode B with max_stops > 0)."""
+        return [h for h in self.hubs if h.blind_van_config.is_delivery_enabled]
+
+    def get_hubs_consolidation_only(self) -> List[HubConfig]:
+        """Get list of hubs with consolidation only (Mode A or Mode B with max_stops = 0)."""
+        return [h for h in self.hubs if not h.blind_van_config.is_delivery_enabled]
+
+    def has_any_delivery_enabled(self) -> bool:
+        """Check if any hub has en-route delivery enabled."""
+        return any(h.blind_van_config.is_delivery_enabled for h in self.hubs)
 
 
 class HubIndexManager:

@@ -6,7 +6,12 @@ Supports 0 to N hubs with:
 - Single Hub Mode: Traditional two-tier (Blind Van + Motors)
 - Multi Hub Mode: Blind Van TSP tour to all hubs, Motors from each hub/DEPOT
 
-Tier 1: Blind Van consolidates bulk delivery to hubs (DEPOT -> Hub1 -> Hub2 -> ... -> DEPOT)
+Features:
+- Per-hub blind van modes (Mode A: consolidation only, Mode B: consolidation + delivery)
+- Hybrid source assignment (dynamic cost-based + zone fallback)
+- Flexible blind van return policy (can end at last hub)
+
+Tier 1: Blind Van consolidates bulk delivery to hubs (DEPOT -> Hub1 -> Hub2 -> [DEPOT])
 Tier 2: Motors from each hub serve that hub's orders, Motors from DEPOT serve direct orders
 """
 from typing import List, Tuple, Optional, Dict
@@ -20,6 +25,8 @@ from ..models.route import Route, RouteStop, RoutingSolution
 from ..models.hub_config import MultiHubConfig, HubConfig, HubIndexManager
 from ..utils.hub_routing import MultiHubRoutingManager
 from .vrp_solver import VRPSolver
+from .dynamic_source_assigner import DynamicSourceAssigner
+from .blind_van_router import BlindVanRouter
 
 
 class TwoTierRoutingError(Exception):
@@ -79,10 +86,68 @@ class MultiHubVRPSolver:
         hub_ids = multi_hub_config.get_all_hub_ids()
         self.index_manager = HubIndexManager(hub_ids)
 
-        # Classify orders by hub
-        self.classified_orders = hub_routing_manager.classify_orders(orders)
+        # Build hub_id to matrix index map
+        self.hub_index_map = {
+            hub_id: self.index_manager.get_hub_index(hub_id)
+            for hub_id in hub_ids
+        }
+
+        # Build order_id to matrix index map
+        self.order_index_map = {
+            order.sale_order_id: self.index_manager.get_customer_index(i)
+            for i, order in enumerate(orders)
+        }
+
+        # Classify orders by hub (with dynamic assignment if configured)
+        self.classified_orders = self._classify_orders_smart()
 
         self._print_classification_summary()
+
+    def _classify_orders_smart(self) -> Dict[str, List[Order]]:
+        """
+        Classify orders using configured source assignment mode.
+
+        Supports:
+        - zone_based: Traditional zone-based assignment
+        - dynamic: Pure cost-based assignment
+        - hybrid: Dynamic with zone-based fallback
+
+        Returns:
+            Dict mapping source_id to list of orders
+        """
+        source_assignment = self.hub_config.source_assignment
+
+        if source_assignment.mode == "zone_based":
+            # Use existing zone-based classification
+            return self.hub_manager.classify_orders(self.orders)
+
+        # For dynamic or hybrid modes, use DynamicSourceAssigner
+        assigner = DynamicSourceAssigner(
+            depot=self.depot,
+            hub_configs=self.hub_config.hubs,
+            distance_matrix=self.full_distance_matrix,
+            duration_matrix=self.full_duration_matrix,
+            config=source_assignment,
+            hub_index_map=self.hub_index_map,
+            order_index_offset=self.index_manager.customer_start_index,
+        )
+
+        # Get zone-based classification for hybrid fallback
+        zone_assignments = self.hub_manager.classify_orders_zone_based(self.orders)
+
+        # Apply dynamic/hybrid assignment
+        result = assigner.assign_orders(self.orders, zone_assignments)
+
+        # If dynamic assigner returns empty (mode=zone_based), use zone classification
+        if not result or all(len(orders) == 0 for orders in result.values()):
+            return zone_assignments
+
+        # Log assignment summary
+        summary = assigner.get_assignment_summary(self.orders, result)
+        print(f"\n[Source Assignment] Mode: {source_assignment.mode}")
+        print(f"  Threshold: {source_assignment.min_cost_advantage_percent}% cost advantage required to switch")
+
+        return result
 
     def _print_classification_summary(self):
         """Print order classification summary."""
@@ -97,11 +162,13 @@ class MultiHubVRPSolver:
             else:
                 hub_config = self.hub_config.get_hub_by_id(source_id)
                 hub_name = hub_config.hub.name if hub_config else source_id
-                print(f"  {hub_name} ({source_id}): {len(source_orders)} orders, {weight:.1f} kg")
+                mode = hub_config.blind_van_config.mode.value if hub_config else "unknown"
+                print(f"  {hub_name} ({source_id}): {len(source_orders)} orders, {weight:.1f} kg [Mode: {mode}]")
                 total_hub_orders += len(source_orders)
                 total_hub_weight += weight
 
         print(f"  Total hub orders: {total_hub_orders}, Total hub weight: {total_hub_weight:.1f} kg")
+        print(f"  Blind van return to depot: {self.hub_config.blind_van_return_to_depot}")
 
     def solve(
         self,
@@ -209,8 +276,9 @@ class MultiHubVRPSolver:
         """
         Solve Tier 1: Blind Van visits all hubs with orders in optimal sequence.
 
-        Route: DEPOT -> Hub_A -> Hub_B -> ... -> DEPOT
-        Uses TSP (nearest neighbor heuristic) to find optimal hub visit sequence.
+        Uses BlindVanRouter to support per-hub modes:
+        - Mode A: Consolidation only
+        - Mode B: Consolidation + en-route delivery
 
         Args:
             time_limit: Time limit in seconds
@@ -233,73 +301,62 @@ class MultiHubVRPSolver:
             print("[Tier 1] Warning: Blind Van not found in fleet, skipping consolidation")
             return []
 
-        # Solve TSP for optimal hub visit sequence
-        hub_sequence = self._solve_hub_tsp(hubs_with_orders)
+        # Get active hub configs
+        active_hub_configs = [
+            self.hub_config.get_hub_by_id(hub_id)
+            for hub_id in hubs_with_orders
+            if self.hub_config.get_hub_by_id(hub_id) is not None
+        ]
 
-        # Create Blind Van route with stops at each hub
-        route_stops = []
-        total_distance = 0.0
-        prev_matrix_idx = self.index_manager.get_depot_index()  # Start from DEPOT
-
-        for seq, hub_id in enumerate(hub_sequence):
-            hub_config = self.hub_config.get_hub_by_id(hub_id)
-            if not hub_config:
-                continue
-
-            hub_orders = self.classified_orders[hub_id]
-            hub_weight = sum(o.load_weight_in_kg for o in hub_orders)
-
-            hub_matrix_idx = self.index_manager.get_hub_index(hub_id)
-            distance = self.full_distance_matrix[prev_matrix_idx, hub_matrix_idx]
-            total_distance += distance
-
-            # Create hub consolidation order
-            hub_order = Order(
-                sale_order_id=f"HUB_CONSOLIDATION_{hub_id}",
-                delivery_date=hub_orders[0].delivery_date if hub_orders else "2025-01-01",
-                delivery_time="05:30-06:00",
-                load_weight_in_kg=hub_weight,
-                partner_id=hub_id,
-                display_name=f"Hub Consolidation ({hub_config.hub.name})",
-                alamat=hub_config.hub.address,
-                coordinates=hub_config.hub.coordinates,
-                kota="HUB",
-                is_priority=False,
-            )
-
-            # Calculate cumulative weight
-            prev_weight = route_stops[-1].cumulative_weight if route_stops else 0
-
-            stop = RouteStop(
-                order=hub_order,
-                arrival_time=self.hub_config.blind_van_arrival,
-                departure_time=self.hub_config.blind_van_arrival,
-                distance_from_prev=distance,
-                cumulative_weight=prev_weight + hub_weight,
-                sequence=seq,
-            )
-            route_stops.append(stop)
-            prev_matrix_idx = hub_matrix_idx
-
-        # Add return to depot distance
-        return_distance = self.full_distance_matrix[prev_matrix_idx, self.index_manager.get_depot_index()]
-        total_distance += return_distance
-
-        route = Route(
-            vehicle=blind_van,
-            stops=route_stops,
-            total_distance=total_distance,
-            total_cost=total_distance * blind_van.cost_per_km,
-            departure_time=self.hub_config.blind_van_departure,
-            source="DEPOT",
-            trip_number=1,
+        # Use BlindVanRouter for intelligent routing with Mode A/B support
+        router = BlindVanRouter(
+            depot=self.depot,
+            hub_configs=active_hub_configs,
+            orders=self.orders,
+            classified_orders=self.classified_orders,
+            blind_van=blind_van,
+            distance_matrix=self.full_distance_matrix,
+            duration_matrix=self.full_duration_matrix,
+            multi_hub_config=self.hub_config,
+            hub_index_map=self.hub_index_map,
+            order_index_map=self.order_index_map,
         )
 
-        hub_names = " -> ".join([
-            self.hub_config.get_hub_by_id(h).hub.name for h in hub_sequence
-        ])
-        print(f"[Tier 1] Blind Van: DEPOT -> {hub_names} -> DEPOT")
-        print(f"[Tier 1]   Distance: {total_distance:.1f} km, Stops: {len(hub_sequence)}, Cost: Rp {route.total_cost:,.0f}")
+        route = router.solve()
+        if not route:
+            print("[Tier 1] BlindVanRouter returned no route")
+            return []
+
+        # Get en-route delivered orders and remove from DEPOT pool
+        delivered_en_route = router.get_delivered_orders()
+        if delivered_en_route:
+            print(f"[Tier 1] En-route deliveries: {len(delivered_en_route)} orders")
+            # Remove delivered orders from DEPOT pool for Tier 2
+            depot_orders = self.classified_orders.get(MultiHubRoutingManager.DIRECT_KEY, [])
+            for order in delivered_en_route:
+                if order in depot_orders:
+                    depot_orders.remove(order)
+
+        # Get route summary
+        summary = router.get_route_summary(route)
+
+        # Build log message
+        hub_names = []
+        for stop in route.stops:
+            if stop.order.sale_order_id.startswith("HUB_CONSOLIDATION"):
+                hub_id = stop.order.partner_id
+                hub_config = self.hub_config.get_hub_by_id(hub_id)
+                if hub_config:
+                    hub_names.append(hub_config.hub.name)
+
+        if self.hub_config.blind_van_return_to_depot:
+            route_str = f"DEPOT -> {' -> '.join(hub_names)} -> DEPOT"
+        else:
+            route_str = f"DEPOT -> {' -> '.join(hub_names)} (end at last hub)"
+
+        print(f"[Tier 1] Blind Van: {route_str}")
+        print(f"[Tier 1]   Total stops: {summary['total_stops']} (deliveries: {summary['delivery_stops']}, hubs: {summary['hub_stops']})")
+        print(f"[Tier 1]   Distance: {route.total_distance:.1f} km, Cost: Rp {route.total_cost:,.0f}")
 
         return [route]
 

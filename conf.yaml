@@ -82,7 +82,7 @@ hubs:
   enabled: true # Enable hub-based routing (false = all orders direct from DEPOT)
 
   # Hub definitions (0 to N hubs)
-  # Each hub has its own zone assignments
+  # Each hub has its own zone assignments and blind van mode
   locations:
     - id: "hub_utara"
       name: "Hub Utara"
@@ -94,8 +94,12 @@ hubs:
         - "JAKARTA BARAT"
         - "TANGERANG"
         - "BEKASI UTARA"
+      # Per-hub blind van configuration
+      # mode: "consolidation_only" (Mode A) or "consolidation_with_delivery" (Mode B)
+      blind_van:
+        mode: "consolidation_only" # Mode A: only consolidation, no delivery
 
-    # Example: Add more hubs as needed
+    # Example: Hub with Mode B (consolidation + en-route delivery)
     # - id: "hub_selatan"
     #   name: "Hub Selatan"
     #   latitude: -6.280000
@@ -105,13 +109,20 @@ hubs:
     #     - "JAKARTA SELATAN"
     #     - "DEPOK"
     #     - "BOGOR"
+    #   blind_van:
+    #     mode: "consolidation_with_delivery"  # Mode B
+    #     en_route_delivery:
+    #       max_stops: 3           # Max delivery stops before reaching hub
+    #       max_detour_minutes: 10 # Max time deviation from direct route
+    #       max_detour_km: 5.0     # Max distance deviation from direct route
+    #       reserve_capacity_kg: 100  # Reserved capacity for hub consolidation
 
   # Blind Van schedule for hub consolidation
-  # Blind Van visits all hubs in optimal sequence (TSP)
   blind_van_schedule:
     departure_time: "05:30" # Depart from DEPOT
-    arrival_time: "06:00" # Complete hub tour by this time
+    hub_arrival_deadline: "06:00" # Must arrive at hubs by this time (HARD constraint)
     vehicle_name: "Blind Van" # Which vehicle type for consolidation
+    return_to_depot: false # Set to false if blind van can end at last hub
 
   # Motor routing settings
   motor_routing:
@@ -123,6 +134,18 @@ hubs:
   # "nearest" = assign to geographically nearest hub
   # "depot" = route directly from depot (no hub)
   unassigned_zone_behavior: "nearest"
+
+  # Source assignment strategy
+  # "zone_based" = assign based on zone config only (current behavior)
+  # "dynamic" = assign based on cost comparison (distance + time)
+  # "hybrid" = dynamic with zone-based fallback
+  source_assignment:
+    mode: "hybrid"
+    dynamic:
+      min_cost_advantage_percent: 10 # Switch source only if 10% better
+      weights:
+        distance: 1.0 # Weight for distance cost
+        time: 0.5 # Weight for travel time cost
 
 # Cache configuration for Radar API (cost optimization)
 cache:

@@ -162,6 +162,20 @@ class Order:
         """
         return max(0, self.time_window_start - 30)
 
+    @property
+    def latitude(self) -> float:
+        """Get latitude from coordinates."""
+        return self.coordinates[0]
+
+    @property
+    def longitude(self) -> float:
+        """Get longitude from coordinates."""
+        return self.coordinates[1]
+
+    def to_tuple(self) -> Tuple[float, float]:
+        """Get coordinates as tuple (for Location compatibility)."""
+        return self.coordinates
+
     def __repr__(self) -> str:
         """String representation of the order."""
         priority_flag = " [PRIORITY]" if self.is_priority else ""

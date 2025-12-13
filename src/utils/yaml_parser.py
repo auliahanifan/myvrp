@@ -7,7 +7,14 @@ import yaml
 from typing import List, Optional, Dict
 from ..models.vehicle import Vehicle, VehicleFleet
 from ..models.location import Hub
-from ..models.hub_config import HubConfig, MultiHubConfig
+from ..models.hub_config import (
+    HubConfig,
+    MultiHubConfig,
+    BlindVanMode,
+    EnRouteDeliveryConfig,
+    HubBlindVanConfig,
+    SourceAssignmentConfig,
+)
 from .hub_routing import parse_hub_config, time_str_to_minutes
 
 
@@ -199,27 +206,98 @@ class YAMLParser:
                     ),
                     address=loc.get("address", ""),
                 )
+
+                # Parse per-hub blind van configuration
+                blind_van_cfg = self._parse_hub_blind_van_config(loc.get("blind_van", {}))
+
                 hub_config = HubConfig(
                     hub=hub,
                     hub_id=loc.get("id", hub.hub_id),
                     zones_via_hub=loc.get("zones_via_hub", []),
+                    blind_van_config=blind_van_cfg,
                 )
                 hub_configs.append(hub_config)
 
             schedule = config.get("blind_van_schedule", {})
             motor = config.get("motor_routing", {})
 
+            # Parse source assignment configuration
+            source_assignment_cfg = self._parse_source_assignment_config(
+                config.get("source_assignment", {})
+            )
+
+            # Support both old 'arrival_time' and new 'hub_arrival_deadline'
+            hub_arrival = schedule.get("hub_arrival_deadline") or schedule.get("arrival_time", "06:00")
+
             return MultiHubConfig(
                 hubs=hub_configs,
                 enabled=config.get("enabled", True) and len(hub_configs) > 0,
                 blind_van_departure=time_str_to_minutes(schedule.get("departure_time", "05:30")),
-                blind_van_arrival=time_str_to_minutes(schedule.get("arrival_time", "06:00")),
+                blind_van_arrival=time_str_to_minutes(hub_arrival),
                 motor_start_time=time_str_to_minutes(motor.get("start_delivery_after", "06:00")),
                 unassigned_zone_behavior=config.get("unassigned_zone_behavior", "nearest"),
                 blind_van_vehicle_name=schedule.get("vehicle_name", "Blind Van"),
+                blind_van_return_to_depot=schedule.get("return_to_depot", False),
+                source_assignment=source_assignment_cfg,
             )
         except Exception as e:
             raise YAMLParserError(f"Error parsing multi-hub configuration: {str(e)}")
+
+    def _parse_hub_blind_van_config(self, config: Dict) -> HubBlindVanConfig:
+        """
+        Parse per-hub blind van configuration.
+
+        Args:
+            config: The 'blind_van' section for a hub
+
+        Returns:
+            HubBlindVanConfig object
+        """
+        if not config:
+            return HubBlindVanConfig()
+
+        # Parse mode
+        mode_str = config.get("mode", "consolidation_only")
+        try:
+            mode = BlindVanMode(mode_str)
+        except ValueError:
+            mode = BlindVanMode.CONSOLIDATION_ONLY
+
+        # Parse en-route delivery config if present
+        en_route_cfg = None
+        if mode == BlindVanMode.CONSOLIDATION_WITH_DELIVERY:
+            en_route_data = config.get("en_route_delivery", {})
+            en_route_cfg = EnRouteDeliveryConfig(
+                max_stops=en_route_data.get("max_stops", 0),
+                max_detour_minutes=en_route_data.get("max_detour_minutes", 10),
+                max_detour_km=en_route_data.get("max_detour_km", 5.0),
+                reserve_capacity_kg=en_route_data.get("reserve_capacity_kg", 100.0),
+            )
+
+        return HubBlindVanConfig(mode=mode, en_route_delivery=en_route_cfg)
+
+    def _parse_source_assignment_config(self, config: Dict) -> SourceAssignmentConfig:
+        """
+        Parse source assignment configuration.
+
+        Args:
+            config: The 'source_assignment' section from YAML
+
+        Returns:
+            SourceAssignmentConfig object
+        """
+        if not config:
+            return SourceAssignmentConfig()
+
+        dynamic_cfg = config.get("dynamic", {})
+        weights = dynamic_cfg.get("weights", {})
+
+        return SourceAssignmentConfig(
+            mode=config.get("mode", "zone_based"),
+            min_cost_advantage_percent=dynamic_cfg.get("min_cost_advantage_percent", 10.0),
+            distance_weight=weights.get("distance", 1.0),
+            time_weight=weights.get("time", 0.5),
+        )
 
     def _convert_legacy_hub_config(self, config: Dict) -> MultiHubConfig:
         """

@@ -284,6 +284,21 @@ class MultiHubRoutingManager:
         classified = self.classify_orders(orders)
         return classified.get(self.DIRECT_KEY, [])
 
+    def classify_orders_zone_based(self, orders: List[Order]) -> Dict[str, List[Order]]:
+        """
+        Classify orders using only zone-based assignment (no dynamic optimization).
+
+        This is the pure zone-based classification that can be used as baseline
+        for hybrid dynamic assignment comparison.
+
+        Args:
+            orders: List of orders to classify
+
+        Returns:
+            Dictionary mapping hub_id (or "DEPOT") to list of orders
+        """
+        return self.classify_orders(orders)
+
     def get_routing_summary(self, orders: List[Order]) -> Dict:
         """
         Get summary of hub routing classification.
