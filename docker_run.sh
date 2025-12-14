@@ -29,6 +29,42 @@ if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
 fi
 echo ""
 
+echo "📁 Ensuring required directories and files exist..."
+mkdir -p results .cache .streamlit
+
+# Validate critical files for volume mounts
+if [ ! -f "conf.yaml" ]; then
+  echo "❌ Error: conf.yaml not found. Required for configuration."
+  exit 1
+fi
+
+if [ ! -f ".env" ]; then
+  echo "❌ Error: .env not found. Copy from .env.example and configure."
+  exit 1
+fi
+
+# Create default .streamlit/config.toml if missing
+if [ ! -f ".streamlit/config.toml" ]; then
+  echo "📝 Creating default .streamlit/config.toml..."
+  cat > .streamlit/config.toml << 'TOMLEOF'
+[theme]
+primaryColor = "#366092"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F0F2F6"
+textColor = "#262730"
+font = "sans serif"
+
+[server]
+headless = true
+maxUploadSize = 200
+enableXsrfProtection = false
+enableCORS = true
+
+[browser]
+gatherUsageStats = false
+TOMLEOF
+fi
+
 echo "🚀 Running Docker container on host port ${HOST_PORT}..."
 docker run -d \
   --name "${CONTAINER_NAME}" \
@@ -37,6 +73,10 @@ docker run -d \
   --restart=unless-stopped \
   -p "${HOST_PORT}:${CONTAINER_PORT}" \
   --env-file .env \
+  -v "$(pwd)/results:/app/results" \
+  -v "$(pwd)/.cache:/app/.cache" \
+  -v "$(pwd)/conf.yaml:/app/conf.yaml" \
+  -v "$(pwd)/.streamlit:/app/.streamlit:ro" \
   "${IMAGE_NAME}"
 
 echo ""
