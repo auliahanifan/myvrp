@@ -385,6 +385,74 @@ def render_upload_section():
                 routing['multiple_trips'] = new_multiple_trips
                 st.session_state.config_modified = True
 
+            # Multi-trip detailed configuration
+            if new_multiple_trips:
+                # Ensure multi_trip config exists
+                if 'multi_trip' not in routing:
+                    routing['multi_trip'] = {
+                        'enabled': True,
+                        'buffer_minutes': 60,
+                        'clustering': {'gap_threshold_minutes': 60, 'min_cluster_size': 1},
+                        'vehicle_reuse': {'same_source_only': True, 'max_trips_per_vehicle': 3}
+                    }
+
+                multi_trip = routing['multi_trip']
+
+                new_enabled = st.checkbox(
+                    "Enable multi-trip solver",
+                    value=multi_trip.get('enabled', True),
+                    key="multi_trip_enabled",
+                    help="Use clustering-based multi-trip solver"
+                )
+                if new_enabled != multi_trip.get('enabled', True):
+                    multi_trip['enabled'] = new_enabled
+                    st.session_state.config_modified = True
+
+                if new_enabled:
+                    new_buffer = st.slider(
+                        "Buffer time between trips (min)",
+                        min_value=30,
+                        max_value=120,
+                        value=multi_trip.get('buffer_minutes', 60),
+                        step=10,
+                        key="multi_trip_buffer",
+                        help="Time for vehicle to return and reload"
+                    )
+                    if new_buffer != multi_trip.get('buffer_minutes', 60):
+                        multi_trip['buffer_minutes'] = new_buffer
+                        st.session_state.config_modified = True
+
+                    clustering = multi_trip.get('clustering', {})
+                    new_gap = st.slider(
+                        "Time window gap threshold (min)",
+                        min_value=30,
+                        max_value=180,
+                        value=clustering.get('gap_threshold_minutes', 60),
+                        step=15,
+                        key="multi_trip_gap_threshold",
+                        help="Orders with gaps larger than this form separate clusters"
+                    )
+                    if new_gap != clustering.get('gap_threshold_minutes', 60):
+                        if 'clustering' not in multi_trip:
+                            multi_trip['clustering'] = {}
+                        multi_trip['clustering']['gap_threshold_minutes'] = new_gap
+                        st.session_state.config_modified = True
+
+                    vehicle_reuse = multi_trip.get('vehicle_reuse', {})
+                    new_max_trips = st.slider(
+                        "Max trips per vehicle",
+                        min_value=1,
+                        max_value=5,
+                        value=vehicle_reuse.get('max_trips_per_vehicle', 3),
+                        key="multi_trip_max_trips",
+                        help="Maximum number of trips per physical vehicle"
+                    )
+                    if new_max_trips != vehicle_reuse.get('max_trips_per_vehicle', 3):
+                        if 'vehicle_reuse' not in multi_trip:
+                            multi_trip['vehicle_reuse'] = {}
+                        multi_trip['vehicle_reuse']['max_trips_per_vehicle'] = new_max_trips
+                        st.session_state.config_modified = True
+
         with routing_cols[1]:
             new_priority_tol = st.number_input(
                 "Priority time tolerance (min)",

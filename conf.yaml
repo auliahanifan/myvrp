@@ -34,6 +34,18 @@ routing:
   priority_time_tolerance: 0 # Priority orders must be within time window (in minutes)
   non_priority_time_tolerance: 60 # Non-priority can be late up to 60 minutes (1 hour)
   multiple_trips: true # Allow vehicles to do multiple trips per day
+
+  # Multi-trip configuration (when multiple_trips is true)
+  multi_trip:
+    enabled: true                     # Enable/disable multi-trip feature
+    buffer_minutes: 60                # Buffer time between trips (return + reload)
+    clustering:
+      gap_threshold_minutes: 60       # Orders >60 min apart form separate clusters
+      min_cluster_size: 1             # Minimum orders per cluster
+    vehicle_reuse:
+      same_source_only: true          # Vehicle must return to same source for next trip
+      max_trips_per_vehicle: 3        # Maximum trips per physical vehicle
+
   relax_time_windows: false # if true, solver will relax time window constraint
   time_window_relaxation_minutes: 15 # minutes to relax time window
 

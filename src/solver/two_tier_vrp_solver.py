@@ -25,6 +25,7 @@ from ..models.route import Route, RouteStop, RoutingSolution
 from ..models.hub_config import MultiHubConfig, HubConfig, HubIndexManager
 from ..utils.hub_routing import MultiHubRoutingManager
 from .vrp_solver import VRPSolver
+from .multi_trip_solver import MultiTripSolver
 from .dynamic_source_assigner import DynamicSourceAssigner
 from .blind_van_router import BlindVanRouter
 
@@ -255,20 +256,36 @@ class MultiHubVRPSolver:
         distance_matrix = self._extract_submatrix(self.full_distance_matrix, all_indices)
         duration_matrix = self._extract_submatrix(self.full_duration_matrix, all_indices)
 
-        solver = VRPSolver(
-            orders=self.orders,
-            fleet=self.fleet,
-            depot=self.depot,
-            distance_matrix=distance_matrix,
-            duration_matrix=duration_matrix,
-            config=self.config,
+        # Check if multi-trip is enabled
+        multi_trip_config = self.config.get("routing", {}).get("multi_trip", {})
+        use_multi_trip = (
+            multi_trip_config.get("enabled", False)
+            and self.fleet.multiple_trips
         )
 
-        solution = solver.solve(optimization_strategy, time_limit)
-
-        # Mark all routes as from DEPOT
-        for route in solution.routes:
-            route.source = "DEPOT"
+        if use_multi_trip:
+            solver = MultiTripSolver(
+                orders=self.orders,
+                fleet=self.fleet,
+                depot=self.depot,
+                distance_matrix=distance_matrix,
+                duration_matrix=duration_matrix,
+                config=self.config,
+            )
+            solution = solver.solve(optimization_strategy, time_limit, source="DEPOT")
+        else:
+            solver = VRPSolver(
+                orders=self.orders,
+                fleet=self.fleet,
+                depot=self.depot,
+                distance_matrix=distance_matrix,
+                duration_matrix=duration_matrix,
+                config=self.config,
+            )
+            solution = solver.solve(optimization_strategy, time_limit)
+            # Mark all routes as from DEPOT
+            for route in solution.routes:
+                route.source = "DEPOT"
 
         return solution
 
@@ -491,23 +508,42 @@ class MultiHubVRPSolver:
         distance_matrix = self._extract_submatrix(self.full_distance_matrix, all_indices)
         duration_matrix = self._extract_submatrix(self.full_duration_matrix, all_indices)
 
+        # Check if multi-trip is enabled
+        multi_trip_config = self.config.get("routing", {}).get("multi_trip", {})
+        use_multi_trip = (
+            multi_trip_config.get("enabled", False)
+            and fleet.multiple_trips
+        )
+
         try:
-            solver = VRPSolver(
-                orders=orders,
-                fleet=fleet,
-                depot=hub_config.hub,  # Use hub as depot
-                distance_matrix=distance_matrix,
-                duration_matrix=duration_matrix,
-                vehicle_id_offset=vehicle_offset,
-                config=self.config,
-            )
-
-            solution = solver.solve("balanced", time_limit)
-
-            # Mark routes as originating from this hub
-            for route in solution.routes:
-                route.source = hub_id
-                route.vehicle.name = f"{hub_id.upper()}-{route.vehicle.name}"
+            if use_multi_trip:
+                solver = MultiTripSolver(
+                    orders=orders,
+                    fleet=fleet,
+                    depot=hub_config.hub,  # Use hub as depot
+                    distance_matrix=distance_matrix,
+                    duration_matrix=duration_matrix,
+                    config=self.config,
+                )
+                solution = solver.solve("balanced", time_limit, source=hub_id)
+                # Add hub prefix to vehicle names
+                for route in solution.routes:
+                    route.vehicle.name = f"{hub_id.upper()}-{route.vehicle.name}"
+            else:
+                solver = VRPSolver(
+                    orders=orders,
+                    fleet=fleet,
+                    depot=hub_config.hub,  # Use hub as depot
+                    distance_matrix=distance_matrix,
+                    duration_matrix=duration_matrix,
+                    vehicle_id_offset=vehicle_offset,
+                    config=self.config,
+                )
+                solution = solver.solve("balanced", time_limit)
+                # Mark routes as originating from this hub
+                for route in solution.routes:
+                    route.source = hub_id
+                    route.vehicle.name = f"{hub_id.upper()}-{route.vehicle.name}"
 
             print(f"[Tier 2-{hub_id}] {len(solution.routes)} routes, {solution.total_orders_delivered} orders delivered")
             if solution.unassigned_orders:
@@ -554,23 +590,42 @@ class MultiHubVRPSolver:
         distance_matrix = self._extract_submatrix(self.full_distance_matrix, all_indices)
         duration_matrix = self._extract_submatrix(self.full_duration_matrix, all_indices)
 
+        # Check if multi-trip is enabled
+        multi_trip_config = self.config.get("routing", {}).get("multi_trip", {})
+        use_multi_trip = (
+            multi_trip_config.get("enabled", False)
+            and fleet.multiple_trips
+        )
+
         try:
-            solver = VRPSolver(
-                orders=orders,
-                fleet=fleet,
-                depot=self.depot,
-                distance_matrix=distance_matrix,
-                duration_matrix=duration_matrix,
-                vehicle_id_offset=vehicle_offset,
-                config=self.config,
-            )
-
-            solution = solver.solve("balanced", time_limit)
-
-            # Mark routes as from DEPOT
-            for route in solution.routes:
-                route.source = "DEPOT"
-                route.vehicle.name = f"DEPOT-{route.vehicle.name}"
+            if use_multi_trip:
+                solver = MultiTripSolver(
+                    orders=orders,
+                    fleet=fleet,
+                    depot=self.depot,
+                    distance_matrix=distance_matrix,
+                    duration_matrix=duration_matrix,
+                    config=self.config,
+                )
+                solution = solver.solve("balanced", time_limit, source="DEPOT")
+                # Add DEPOT prefix to vehicle names
+                for route in solution.routes:
+                    route.vehicle.name = f"DEPOT-{route.vehicle.name}"
+            else:
+                solver = VRPSolver(
+                    orders=orders,
+                    fleet=fleet,
+                    depot=self.depot,
+                    distance_matrix=distance_matrix,
+                    duration_matrix=duration_matrix,
+                    vehicle_id_offset=vehicle_offset,
+                    config=self.config,
+                )
+                solution = solver.solve("balanced", time_limit)
+                # Mark routes as from DEPOT
+                for route in solution.routes:
+                    route.source = "DEPOT"
+                    route.vehicle.name = f"DEPOT-{route.vehicle.name}"
 
             print(f"[Tier 2-DEPOT] {len(solution.routes)} routes, {solution.total_orders_delivered} orders delivered")
             if solution.unassigned_orders:
