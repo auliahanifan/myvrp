@@ -5,14 +5,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     UV_LINK_MODE=copy
 
-# Install uv and minimal OS dependencies
+# Install uv to /usr/local/bin (globally accessible)
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
-    && curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Ensure uv is on PATH (installer places it in ~/.local/bin)
-ENV PATH="/root/.local/bin:${PATH}"
+    && curl -LsSf https://astral.sh/uv/install.sh | env UV_UNMANAGED_INSTALL=/usr/local/bin sh
 
 WORKDIR /app
 
@@ -25,9 +22,8 @@ RUN uv sync --locked --no-dev
 # Copy application source
 COPY . .
 
-# Create non-root user for security
-RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
-USER appuser
+# Ensure app files are readable by any user (for --user override)
+RUN chmod -R a+rX /app
 
 EXPOSE 8501
 

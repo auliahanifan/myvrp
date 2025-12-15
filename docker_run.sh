@@ -71,6 +71,8 @@ docker run -d \
   --cpus="1" \
   --memory="2g" \
   --restart=unless-stopped \
+  --user "$(id -u):$(id -g)" \
+  -e HOME=/tmp \
   -p "${HOST_PORT}:${CONTAINER_PORT}" \
   --env-file .env \
   -v "$(pwd)/results:/app/results" \
