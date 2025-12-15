@@ -22,7 +22,8 @@ results/*.xlsx
 results/*.xls
 
 # Cache
-.cache/
+.cache/**
+.cache/*.pkl
 *.pkl
 
 # IDE

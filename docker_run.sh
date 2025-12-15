@@ -30,7 +30,21 @@ fi
 echo ""
 
 echo "📁 Ensuring required directories and files exist..."
-mkdir -p results .cache .streamlit
+
+# Fix ownership first if directories exist but aren't writable (from previous root container)
+for dir in .cache results; do
+  if [ -d "$dir" ] && [ ! -w "$dir" ]; then
+    echo "⚠️  Fixing $dir permissions (may require sudo)..."
+    sudo chown -R "$(id -u):$(id -g)" "$dir" 2>/dev/null || {
+      echo "❌ Error: $dir is not writable."
+      echo "   Run: sudo chown -R \$(id -u):\$(id -g) $dir"
+      exit 1
+    }
+  fi
+done
+
+# Now create all required directories
+mkdir -p results .cache/route_geometry .streamlit
 
 # Validate critical files for volume mounts
 if [ ! -f "conf.yaml" ]; then
