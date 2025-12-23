@@ -360,8 +360,8 @@ class ExcelGenerator:
         ws.cell(row=current_row, column=2).border = self._get_border(thin=True)
         current_row += 1
 
-        # Vehicle details headers
-        vehicle_headers = ["Vehicle Name", "Stops", "Distance (km)", "Cost (Rp)"]
+        # Vehicle details headers (now includes utilization)
+        vehicle_headers = ["Vehicle Name", "Stops", "Weight (kg)", "Capacity (kg)", "Utilization %", "Distance (km)", "Cost (Rp)"]
         for col_num, header in enumerate(vehicle_headers, start=1):
             cell = ws.cell(row=current_row, column=col_num)
             cell.value = header
@@ -373,24 +373,77 @@ class ExcelGenerator:
             cell.border = self._get_border()
 
         # Adjust column widths for vehicle breakdown
-        ws.column_dimensions['C'].width = 15
-        ws.column_dimensions['D'].width = 20
+        ws.column_dimensions['C'].width = 12
+        ws.column_dimensions['D'].width = 14
+        ws.column_dimensions['E'].width = 14
+        ws.column_dimensions['F'].width = 14
+        ws.column_dimensions['G'].width = 18
 
         current_row += 1
 
-        # Write vehicle details
+        # Write vehicle details with utilization metrics
         active_routes = [r for r in solution.routes if r.num_stops > 0]
+        total_weight_used = 0.0
+        total_capacity_available = 0.0
+
         for route in active_routes:
+            weight = route.total_weight
+            capacity = route.vehicle.capacity
+            utilization = (weight / capacity * 100) if capacity > 0 else 0
+
+            total_weight_used += weight
+            total_capacity_available += capacity
+
             ws.cell(row=current_row, column=1).value = route.vehicle.name
             ws.cell(row=current_row, column=2).value = route.num_stops
-            ws.cell(row=current_row, column=3).value = route.total_distance
+            ws.cell(row=current_row, column=3).value = weight
             ws.cell(row=current_row, column=3).number_format = '0.00'
-            ws.cell(row=current_row, column=4).value = route.total_cost
-            ws.cell(row=current_row, column=4).number_format = 'Rp #,##0'
+            ws.cell(row=current_row, column=4).value = capacity
+            ws.cell(row=current_row, column=4).number_format = '0.00'
+            ws.cell(row=current_row, column=5).value = utilization
+            ws.cell(row=current_row, column=5).number_format = '0.0"%"'
+            ws.cell(row=current_row, column=6).value = route.total_distance
+            ws.cell(row=current_row, column=6).number_format = '0.00'
+            ws.cell(row=current_row, column=7).value = route.total_cost
+            ws.cell(row=current_row, column=7).number_format = 'Rp #,##0'
 
-            for col_num in range(1, 5):
+            # Color-code utilization (green=good, yellow=medium, red=low)
+            util_cell = ws.cell(row=current_row, column=5)
+            if utilization >= 70:
+                util_cell.fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")  # Light green
+            elif utilization >= 40:
+                util_cell.fill = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid")  # Light yellow
+            else:
+                util_cell.fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")  # Light red
+
+            for col_num in range(1, 8):
                 ws.cell(row=current_row, column=col_num).border = self._get_border(thin=True)
                 ws.cell(row=current_row, column=col_num).alignment = Alignment(vertical="center")
+
+            current_row += 1
+
+        # Add fleet utilization summary row
+        if active_routes:
+            overall_utilization = (total_weight_used / total_capacity_available * 100) if total_capacity_available > 0 else 0
+
+            ws.cell(row=current_row, column=1).value = "FLEET TOTAL"
+            ws.cell(row=current_row, column=1).font = Font(bold=True)
+            ws.cell(row=current_row, column=3).value = total_weight_used
+            ws.cell(row=current_row, column=3).number_format = '0.00'
+            ws.cell(row=current_row, column=4).value = total_capacity_available
+            ws.cell(row=current_row, column=4).number_format = '0.00'
+            ws.cell(row=current_row, column=5).value = overall_utilization
+            ws.cell(row=current_row, column=5).number_format = '0.0"%"'
+            ws.cell(row=current_row, column=6).value = solution.total_distance
+            ws.cell(row=current_row, column=6).number_format = '0.00'
+            ws.cell(row=current_row, column=7).value = solution.total_cost
+            ws.cell(row=current_row, column=7).number_format = 'Rp #,##0'
+
+            for col_num in range(1, 8):
+                cell = ws.cell(row=current_row, column=col_num)
+                cell.fill = PatternFill(start_color=self.COLOR_SUBTOTAL, end_color=self.COLOR_SUBTOTAL, fill_type="solid")
+                cell.font = Font(bold=True)
+                cell.border = self._get_border()
 
             current_row += 1
 
