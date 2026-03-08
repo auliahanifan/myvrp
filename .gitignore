@@ -29,6 +29,7 @@ results/*.xls
 # IDE
 .vscode/
 .idea/
+.worktrees/
 *.swp
 *.swo
 *~
