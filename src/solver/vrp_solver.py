@@ -522,18 +522,7 @@ class VRPSolver:
 
         # Add return distance to depot
         if route.num_stops > 0:
-            last_node = self.manager.IndexToNode(
-                self.solution.Value(
-                    self.routing.NextVar(
-                        self.manager.NodeToIndex(prev_node)
-                    )
-                )
-            )
-            # Since last_node should be the end node, we use prev_node to get back to depot
             return_distance = self.distance_matrix[prev_node, 0]
-            route.total_distance = sum(
-                stop.distance_from_prev for stop in route.stops
-            ) + return_distance
 
             # Set departure time (earliest order time - 30 minutes)
             if route.stops:
@@ -542,5 +531,8 @@ class VRPSolver:
 
         # Calculate metrics
         route.calculate_metrics()
+        if route.num_stops > 0:
+            route.total_distance += return_distance
+            route.total_cost = route.total_distance * route.vehicle.cost_per_km
 
         return route

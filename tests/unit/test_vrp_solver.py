@@ -157,13 +157,13 @@ class TestVRPSolver:
     def test_solver_capacity_constraint(self, sample_fleet, sample_depot,
                                        sample_distance_matrix_small, sample_duration_matrix_small):
         """Test that capacity constraints are enforced."""
-        # Create orders that exceed single vehicle capacity (300kg max for smallest)
+        # Create orders that force multiple vehicles even with the largest 800kg vehicle.
         heavy_orders = [
             Order(
                 sale_order_id="H001",
                 delivery_date="2025-10-08",
                 delivery_time="04:00-08:00",
-                load_weight_in_kg=250.0,
+                load_weight_in_kg=350.0,
                 partner_id="P001",
                 display_name="Heavy Customer 1",
                 alamat="Address 1",
@@ -174,7 +174,7 @@ class TestVRPSolver:
                 sale_order_id="H002",
                 delivery_date="2025-10-08",
                 delivery_time="04:00-08:00",
-                load_weight_in_kg=250.0,
+                load_weight_in_kg=350.0,
                 partner_id="P002",
                 display_name="Heavy Customer 2",
                 alamat="Address 2",
@@ -185,7 +185,7 @@ class TestVRPSolver:
                 sale_order_id="H003",
                 delivery_date="2025-10-08",
                 delivery_time="04:00-08:00",
-                load_weight_in_kg=250.0,
+                load_weight_in_kg=350.0,
                 partner_id="P003",
                 display_name="Heavy Customer 3",
                 alamat="Address 3",
@@ -204,7 +204,7 @@ class TestVRPSolver:
 
         solution = solver.solve(optimization_strategy="balanced", time_limit=30)
 
-        # Should use multiple vehicles since each order is 250kg (can't fit 2 in 500kg vehicle)
+        # Should use multiple vehicles since 3 x 350kg exceeds the largest 800kg vehicle.
         assert solution.total_vehicles_used >= 2
 
     def test_solver_time_window_validation(self, sample_orders_small, sample_fleet, sample_depot,

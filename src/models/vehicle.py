@@ -2,7 +2,7 @@
 Vehicle model for VRP solver.
 Represents a delivery vehicle with capacity and cost information.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 
@@ -71,18 +71,29 @@ class VehicleFleet:
         non_priority_time_tolerance: Time tolerance for non-priority orders (minutes)
         multiple_trips: If True, vehicles can make multiple trips
     """
-    vehicle_types: list[tuple[Vehicle, int, bool]]  # (vehicle, count, unlimited)
+    vehicle_types: list  # Supports both tuple config and legacy list[Vehicle]
     return_to_depot: bool = True
     priority_time_tolerance: int = 0
     non_priority_time_tolerance: int = 20
     multiple_trips: bool = True
     relax_time_windows: bool = False
     time_window_relaxation_minutes: int = 0
+    unlimited: bool = False
+    _legacy_unlimited_cycle: list[Vehicle] = field(default_factory=list, init=False, repr=False)
 
     def __post_init__(self):
         """Validate fleet data."""
         if not self.vehicle_types:
             raise ValueError("Fleet must have at least one vehicle type")
+        first_item = self.vehicle_types[0]
+        if isinstance(first_item, Vehicle):
+            legacy_types = list(self.vehicle_types)
+            self.vehicle_types = [
+                (vehicle, 1, False)
+                for vehicle in legacy_types
+            ]
+            if self.unlimited:
+                self._legacy_unlimited_cycle = legacy_types
 
     def get_all_vehicles(self, start_id: int = 0) -> list[Vehicle]:
         """
@@ -121,11 +132,24 @@ class VehicleFleet:
         if index < len(all_vehicles):
             return all_vehicles[index]
 
-        # If beyond fixed vehicles, check for unlimited types
-        for vehicle_type, count, unlimited in self.vehicle_types:
-            if unlimited:
-                # Clone the unlimited vehicle type
-                return vehicle_type.clone_with_id(index)
+        if self._legacy_unlimited_cycle:
+            overflow_index = index - len(all_vehicles)
+            vehicle_type = self._legacy_unlimited_cycle[
+                overflow_index % len(self._legacy_unlimited_cycle)
+            ]
+            return vehicle_type.clone_with_id(index)
+
+        unlimited_vehicle_types = [
+            vehicle_type
+            for vehicle_type, _, unlimited in self.vehicle_types
+            if unlimited
+        ]
+        if unlimited_vehicle_types:
+            overflow_index = index - len(all_vehicles)
+            vehicle_type = unlimited_vehicle_types[
+                overflow_index % len(unlimited_vehicle_types)
+            ]
+            return vehicle_type.clone_with_id(index)
 
         raise ValueError(f"Vehicle index {index} out of range and no unlimited vehicles available")
 
@@ -145,7 +169,9 @@ class VehicleFleet:
         Returns:
             True if any vehicle type is unlimited
         """
-        return any(unlimited for _, _, unlimited in self.vehicle_types)
+        return bool(self._legacy_unlimited_cycle) or any(
+            unlimited for _, _, unlimited in self.vehicle_types
+        )
 
     def __len__(self) -> int:
         """Return the total number of fixed vehicles."""

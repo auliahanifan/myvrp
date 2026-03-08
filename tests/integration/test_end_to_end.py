@@ -133,32 +133,29 @@ unlimited: true"""
 
         # Verify Excel file
         assert os.path.exists(excel_path)
-        assert excel_path.endswith(".xlsx")
+        assert excel_path.suffix == ".xlsx"
 
-    @patch('src.utils.distance_calculator.googlemaps.Client')
-    def test_workflow_with_real_parsers_mock_api(self, mock_google_client,
+    @patch('src.utils.distance_calculator.requests.get')
+    def test_workflow_with_real_parsers_mock_api(self, mock_get,
                                                  sample_csv_file, sample_yaml_file,
                                                  temp_test_dir):
-        """Test workflow with real parsers but mocked Google Maps API."""
+        """Test workflow with real parsers but mocked OSRM API."""
 
-        # Mock API response
         mock_api_response = {
-            "status": "OK",
-            "rows": [
-                {
-                    "elements": [
-                        {"status": "OK", "distance": {"value": i * 1000 + j * 500},
-                         "duration": {"value": i * 200 + j * 100}}
-                        for j in range(6)
-                    ]
-                }
+            "code": "Ok",
+            "distances": [
+                [i * 1000 + j * 500 for j in range(6)]
+                for i in range(6)
+            ],
+            "durations": [
+                [i * 200 + j * 100 for j in range(6)]
                 for i in range(6)
             ],
         }
-
-        mock_instance = MagicMock()
-        mock_instance.distance_matrix.return_value = mock_api_response
-        mock_google_client.return_value = mock_instance
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = mock_api_response
+        mock_get.return_value = mock_response
 
         # Parse inputs
         orders = CSVParser(sample_csv_file).parse()
@@ -166,15 +163,8 @@ unlimited: true"""
         depot = Depot("Test Depot", (-6.2088, 106.8456))
 
         # Calculate distances (will use mock API)
-        calculator = DistanceCalculator("mock_api_key", cache_dir=temp_test_dir)
-        locations = [depot] + [
-            type('obj', (object,), {
-                'name': o.display_name,
-                'coordinates': o.coordinates,
-                'to_tuple': lambda self: self.coordinates
-            })()
-            for o in orders
-        ]
+        calculator = DistanceCalculator(cache_dir=temp_test_dir, enable_cache=False)
+        locations = [depot] + orders
 
         dist_matrix, dur_matrix = calculator.calculate_matrix(locations)
 
