@@ -92,6 +92,8 @@ seg-vrp/
 Folder penting:
 
 - `app.py`: entrypoint aplikasi Streamlit.
+- `src/application/`: application service layer untuk orchestration upload, config, planning, history, results, dan map.
+- `src/presentation/`: adapter Streamlit state dan view model ringan.
 - `conf.yaml`: konfigurasi armada, routing, solver, cache, dan multi-hub.
 - `src/solver/vrp_solver.py`: solver VRP dasar.
 - `src/solver/multi_trip_solver.py`: logika multi-trip.
@@ -179,6 +181,16 @@ Alternatif:
 ```bash
 ./run_app.sh
 ```
+
+## Boundary Arsitektur
+
+UI dan backend di repo ini tetap satu monolith, tetapi sekarang dipisahkan secara internal:
+
+- `app.py` hanya menangani widget, layout, dan interaksi Streamlit
+- `src/application/` menjadi source of truth untuk orchestration bisnis
+- solver, parser, output generator, dan visualizer dipanggil melalui application service, bukan langsung dari UI
+
+Tujuannya adalah mencegah perubahan parsial di satu sisi saja. Perubahan flow routing idealnya selalu menyentuh vertical slice lengkap: UI, service contract, orchestration, dan test.
 
 ## Menjalankan Test
 
