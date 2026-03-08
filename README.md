@@ -1,208 +1,240 @@
-# 🚚 Segarloka VRP Solver
+# Segarloka Auto-Route Service
 
-A Vehicle Routing Problem (VRP) solver for optimizing delivery routes for Segarloka's vegetable delivery service. Built with Google OR-Tools, this application handles capacity constraints, time windows, and multiple optimization strategies.
+Segarloka Auto-Route Service adalah aplikasi internal untuk menyusun rute pengiriman secara otomatis. Sistem ini membaca order harian, konfigurasi armada, dan aturan operasional, lalu menghasilkan rencana pengiriman yang mempertimbangkan kapasitas kendaraan, time window, biaya perjalanan, prioritas order, serta skenario distribusi melalui depot dan hub.
 
-## ✅ Phase 1 - COMPLETED
+Implementasi saat ini sudah melampaui solver VRP dasar. Repository ini berisi aplikasi Streamlit untuk tim operasi, solver OR-Tools untuk direct routing dan multi-trip, serta workflow multi-hub dengan blind van consolidation dan last-mile delivery dari hub.
 
-All Phase 1 components have been successfully implemented:
+## Fitur Saat Ini
 
-### 📦 Project Structure
+- Web app berbasis Streamlit untuk upload order, konfigurasi routing, eksekusi solver, dan download hasil.
+- Parsing order CSV dengan validasi field utama, koordinat, bobot, tanggal, jam kirim, dan flag prioritas.
+- Parsing konfigurasi YAML untuk armada, toleransi time window, multi-trip, cache, dan multi-hub.
+- Perhitungan distance matrix dan duration matrix via OSRM, dengan cache lokal dan fallback Haversine saat request gagal.
+- Solver VRP berbasis OR-Tools untuk:
+  - direct routing dari depot,
+  - multi-trip routing,
+  - multi-hub / two-tier routing,
+  - dynamic source assignment,
+  - blind van routing untuk konsolidasi ke hub.
+- Tiga strategi optimasi: `minimize_vehicles`, `minimize_cost`, dan `balanced`.
+- Output Excel, CSV, dan visualisasi peta untuk hasil routing.
+- Test unit dan integration untuk parser, solver, multi-trip, smart routing, dan workflow end-to-end.
 
-```
+## Gambaran Arsitektur
+
+Alur utama sistem:
+
+1. User upload file order CSV dari web app.
+2. Sistem memuat `conf.yaml` untuk armada, routing, hub, dan parameter solver.
+3. Lokasi depot, hub, dan customer dikirim ke OSRM untuk membentuk matriks jarak dan durasi.
+4. Order diklasifikasikan ke sumber pengiriman yang sesuai:
+   - langsung dari depot,
+   - via hub berdasarkan zone mapping,
+   - atau dipindahkan secara dinamis jika lebih efisien.
+5. Solver menjalankan optimasi sesuai mode routing yang aktif.
+6. Hasil disajikan sebagai tabel, file ekspor, dan peta.
+
+## Mode Routing yang Didukung
+
+### 1. Direct Routing
+
+Semua order dikirim langsung dari depot dengan constraint kapasitas, time window, dan biaya.
+
+### 2. Multi-Trip Routing
+
+Kendaraan yang sama dapat dipakai lebih dari satu trip dalam satu hari, mengikuti buffer time, clustering order, dan batas maksimum trip per kendaraan.
+
+### 3. Multi-Hub / Two-Tier Routing
+
+Sistem mendukung 0 sampai N hub.
+
+- Zero hub mode: semua order berangkat dari depot.
+- Single hub mode: blind van melakukan konsolidasi ke hub, lalu motor mengantar order dari hub.
+- Multi-hub mode: blind van mengunjungi beberapa hub, lalu last-mile diselesaikan dari masing-masing source.
+
+### 4. Dynamic Source Assignment
+
+Order dapat tetap mengikuti aturan zona, atau dipindahkan ke source lain jika secara biaya/jarak/waktu lebih menguntungkan, tergantung mode `zone_based`, `dynamic`, atau `hybrid`.
+
+## Constraint Operasional
+
+Constraint yang terlihat aktif di codebase:
+
+- kapasitas kendaraan,
+- time window pengiriman,
+- prioritas order,
+- return-to-depot policy,
+- multi-trip reuse,
+- hub arrival deadline untuk blind van,
+- soft handling untuk sebagian constraint melalui tolerance atau penalty config,
+- opsi order tidak ter-assign bila constraint terlalu ketat.
+
+## Struktur Project
+
+```text
 seg-vrp/
+├── app.py
+├── conf.yaml
 ├── src/
-│   ├── models/              # Data models
-│   │   ├── order.py        # Order model with time windows
-│   │   ├── vehicle.py      # Vehicle and fleet models
-│   │   ├── route.py        # Route and solution models
-│   │   └── location.py     # Location and depot models
-│   ├── solver/             # VRP solver logic
-│   │   └── vrp_solver.py   # OR-Tools CVRPTW implementation
-│   ├── utils/              # Helper utilities
-│   │   ├── csv_parser.py   # CSV order data parser
-│   │   ├── yaml_parser.py  # YAML vehicle config parser
-│   │   └── distance_calculator.py  # OSRM API integration
-│   ├── output/             # Excel output generator (Phase 2)
-│   └── config/             # Configuration files
+│   ├── models/
+│   ├── output/
+│   ├── solver/
+│   ├── utils/
+│   └── visualization/
+├── tests/
+│   ├── integration/
+│   └── unit/
 ├── example/
-│   ├── example_input.csv           # Sample order data
-│   └── example_input_vehicle.yaml  # Sample vehicle config
-├── results/                # Output Excel files
-├── tests/                  # Unit tests
-├── .env.example           # Environment variables template
-├── pyproject.toml         # Project configuration
-└── requirements.txt       # Python dependencies
+├── results/
+└── Dockerfile
 ```
 
-### 🎯 Features Implemented
+Folder penting:
 
-#### 1.1 Project Setup ✅
-- Python project with `pyproject.toml` and `requirements.txt`
-- Dependencies: OR-Tools, Pandas, NumPy, openpyxl, PyYAML, requests, streamlit
-- Complete folder structure with all required directories
+- `app.py`: entrypoint aplikasi Streamlit.
+- `conf.yaml`: konfigurasi armada, routing, solver, cache, dan multi-hub.
+- `src/solver/vrp_solver.py`: solver VRP dasar.
+- `src/solver/multi_trip_solver.py`: logika multi-trip.
+- `src/solver/two_tier_vrp_solver.py`: solver multi-hub / two-tier.
+- `src/solver/dynamic_source_assigner.py`: assignment source dinamis.
+- `src/solver/blind_van_router.py`: routing blind van untuk konsolidasi hub.
+- `src/output/`: generator Excel dan CSV.
+- `tests/`: unit test dan integration test.
 
-#### 1.2 Data Models ✅
-- **Order Model** (`src/models/order.py`)
-  - Full order information with validation
-  - Time window properties (start, end, departure time)
-  - Coordinate validation
-  - Priority order support
+## Input yang Diharapkan
 
-- **Vehicle Model** (`src/models/vehicle.py`)
-  - Vehicle type definition with capacity and cost
-  - Vehicle fleet management
-  - Unlimited fleet support with auto-cloning
+### Order CSV
 
-- **Route Model** (`src/models/route.py`)
-  - Route stop with arrival/departure times
-  - Route with vehicle assignment and stops
-  - Complete solution with multiple routes
-  - Validation for capacity and time windows
+Field utama yang didukung parser:
 
-- **Location Model** (`src/models/location.py`)
-  - Location with coordinates
-  - Depot as special location type
+- `sale_order_id`
+- `delivery_date`
+- `delivery_time`
+- `load_weight_in_kg`
+- `partner_id`
+- `display_name`
+- `alamat`
+- `coordinates` atau pasangan `partner_latitude` + `partner_longitude`
 
-#### 1.3 Input Parsers ✅
-- **CSV Parser** (`src/utils/csv_parser.py`)
-  - Parses order CSV files with all required columns
-  - Validates coordinates, weights, dates, times
-  - Handles priority orders
-  - Comprehensive error reporting
+Field tambahan yang juga didukung:
 
-- **YAML Parser** (`src/utils/yaml_parser.py`)
-  - Parses vehicle configuration YAML
-  - Validates vehicle specs (capacity, cost)
-  - Supports unlimited fleet configuration
+- `kelurahan`
+- `kecamatan`
+- `kota`
+- `is_priority`
 
-#### 1.4 OSRM API Integration ✅
-- **Distance Calculator** (`src/utils/distance_calculator.py`)
-  - OSRM Distance Matrix API client
-  - Calculates distance and duration matrices
-  - Intelligent caching to minimize API calls
-  - Comprehensive error handling
+### Konfigurasi YAML
 
-#### 1.5 VRP Solver (OR-Tools) ✅
-- **CVRPTW Solver** (`src/solver/vrp_solver.py`)
-  - Capacitated VRP with Time Windows
-  - **Capacity constraint**: Enforces vehicle max capacity
-  - **Time window constraint**: HARD constraint (must be met)
-  - **Service time**: 15 minutes per location
-  - **Departure time**: 30 minutes before earliest delivery
-  - **Depot constraint**: All routes start/end at depot
-  - **3 optimization strategies**:
-    - `minimize_vehicles`: Minimize number of vehicles used
-    - `minimize_cost`: Minimize total cost (distance × cost_per_km)
-    - `balanced`: Balance between vehicles and cost
-  - **Unlimited vehicle fleet**: Auto-adds vehicles as needed
-  - Complete solution extraction with route details
+`conf.yaml` memuat:
 
-## 🚀 Quick Start
+- daftar kendaraan dan kapasitas,
+- biaya per km,
+- jumlah unit tetap / unlimited,
+- konfigurasi return to depot,
+- tolerance time window,
+- multi-trip config,
+- solver config,
+- cache config,
+- definisi hub dan source assignment.
 
-### 1. Setup Environment
+## Menjalankan Aplikasi
+
+Project ini menggunakan `uv`.
+
+### 1. Install dependency
 
 ```bash
-# Install dependencies using uv (recommended)
-uv pip install -r requirements.txt
-
-# Or sync from pyproject.toml
 uv sync
+```
 
-# Configure environment
+Jika Anda perlu install dari `requirements.txt`:
+
+```bash
+uv pip install -r requirements.txt
+```
+
+### 2. Siapkan environment
+
+```bash
 cp .env.example .env
 ```
 
-### 2. Prepare Input Files
-
-**Order CSV** (`example/example_input.csv`):
-```csv
-sale_order_id,delivery_date,delivery_time,load_weight_in_kg,partner_id,display_name,alamat,coordinates,is_priority
-SO001,2025-10-10,08:00,25.5,C001,Toko Segar Jaya,Jl. Sudirman No. 123,-6.2088,106.8456,0
-```
-
-**Vehicle YAML** (`example/example_input_vehicle.yaml`):
-```yaml
-vehicles:
-  - name: "L300"
-    capacity: 800  # kg
-    cost_per_km: 5000  # Rupiah
-unlimited: true
-```
-
-### 3. Run Solver (Coming in Phase 3)
-
-```python
-from src.utils.csv_parser import CSVParser
-from src.utils.yaml_parser import YAMLParser
-from src.utils.distance_calculator import DistanceCalculator
-from src.solver.vrp_solver import VRPSolver
-from src.models.location import Depot
-
-# Parse inputs
-orders = CSVParser("example/example_input.csv").parse()
-fleet = YAMLParser("example/example_input_vehicle.yaml").parse()
-
-# Setup depot
-depot = Depot("Segarloka Warehouse", (-6.2088, 106.8456))
-
-# Calculate distances
-calculator = DistanceCalculator()
-locations = [depot] + [order to Location for each order]
-distance_matrix, duration_matrix = calculator.calculate_matrix(locations)
-
-# Solve VRP
-solver = VRPSolver(orders, fleet, depot, distance_matrix, duration_matrix)
-solution = solver.solve(optimization_strategy="balanced", time_limit=300)
-
-# View results
-print(solution)
-```
-
-## 📋 Next Steps - Phase 2
-
-Phase 2 will implement the Excel output generator:
-- Generate routes by vehicle sheet
-- Generate summary sheet
-- Color coding for priority orders
-- Professional formatting
-
-## 🔧 Technical Details
-
-### Constraints
-- **Capacity**: HARD - Vehicle capacity cannot be exceeded
-- **Time Windows**: HARD - Must arrive at exact delivery time
-- **Service Time**: 15 minutes per stop for unloading
-- **Depot**: All vehicles start and end at depot
-
-### Optimization Strategies
-1. **Minimize Vehicles**: Reduces fleet size (uses Guided Local Search)
-2. **Minimize Cost**: Reduces total distance/cost (uses Simulated Annealing)
-3. **Balanced**: Balances both objectives (uses Automatic metaheuristic)
-
-### API Integration
-- OSRM Distance Matrix API for accurate distances
-- Caching system to minimize API calls and costs
-
-## 📝 Environment Variables
-
-Required in `.env` file:
+Environment variable yang dipakai untuk depot:
 
 ```env
 DEPOT_LATITUDE=-6.2088
 DEPOT_LONGITUDE=106.8456
 DEPOT_NAME=Segarloka Warehouse
+DEPOT_ADDRESS=Jakarta, Indonesia
 ```
 
-## 🧪 Testing
+### 3. Jalankan web app
 
-Testing suite will be implemented in Phase 4.
+```bash
+uv run streamlit run app.py
+```
 
-## 📄 License
+Alternatif:
+
+```bash
+./run_app.sh
+```
+
+## Menjalankan Test
+
+```bash
+uv run pytest
+```
+
+Contoh menjalankan subset test:
+
+```bash
+uv run pytest tests/unit
+uv run pytest tests/integration
+```
+
+Catatan: sebagian integration test akan mencoba membentuk distance matrix dari layanan OSRM, sehingga hasilnya bergantung pada akses service tersebut.
+
+## Output
+
+Sistem saat ini dapat menghasilkan:
+
+- Excel workbook berisi route detail dan summary,
+- CSV output untuk route dan ringkasan,
+- HTML map / visualisasi rute.
+
+Hasil umumnya disimpan di folder `results/`.
+
+## Docker
+
+Untuk menjalankan via Docker:
+
+```bash
+PORT=8501 ./docker_run.sh
+```
+
+Script ini akan:
+
+- build image,
+- menyiapkan mount untuk `results`, `.cache`, `.streamlit`, dan `conf.yaml`,
+- menjalankan aplikasi Streamlit dalam container.
+
+## Teknologi Utama
+
+- Python 3.9+
+- OR-Tools
+- Streamlit
+- Pandas
+- NumPy
+- openpyxl
+- PyYAML
+- folium / streamlit-folium
+- OSRM
+
+## Status Dokumentasi
+
+README ini mengikuti implementasi aktual di codebase saat ini. Beberapa dokumen lama di repository mungkin masih merefleksikan fase awal project dan belum sepenuhnya menggambarkan fitur yang sudah tersedia sekarang.
+
+## License
 
 Proprietary - Segarloka Internal Use Only
-
-## 👥 Contributors
-
-- Segarloka Development Team
-
-

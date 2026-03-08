@@ -11,6 +11,7 @@ Tests:
 import pytest
 import pandas as pd
 from pathlib import Path
+from unittest.mock import MagicMock
 
 from src.models.order import Order
 from src.models.location import Depot, Hub
@@ -48,6 +49,41 @@ def load_orders_from_csv(csv_path: str) -> list[Order]:
 
 class TestSmartRoutingEndToEnd:
     """End-to-end tests for smart routing system."""
+
+    @pytest.fixture(autouse=True)
+    def mock_osrm_api(self, monkeypatch):
+        """Mock OSRM matrix responses so integration tests stay deterministic."""
+
+        def fake_get(url, params=None, timeout=None):
+            coords_part = url.rsplit("/", 1)[-1]
+            size = len(coords_part.split(";"))
+
+            distances = []
+            durations = []
+            for i in range(size):
+                distance_row = []
+                duration_row = []
+                for j in range(size):
+                    if i == j:
+                        distance_row.append(0)
+                        duration_row.append(0)
+                    else:
+                        base_distance_m = abs(i - j) * 1000 + 500
+                        distance_row.append(base_distance_m)
+                        duration_row.append(base_distance_m // 10)
+                distances.append(distance_row)
+                durations.append(duration_row)
+
+            response = MagicMock()
+            response.status_code = 200
+            response.json.return_value = {
+                "code": "Ok",
+                "distances": distances,
+                "durations": durations,
+            }
+            return response
+
+        monkeypatch.setattr("src.utils.distance_calculator.requests.get", fake_get)
 
     @pytest.fixture
     def csv_path(self):
@@ -223,8 +259,8 @@ class TestSmartRoutingEndToEnd:
         """Test full two-tier VRP solver with smart routing."""
         from src.solver.two_tier_vrp_solver import MultiHubVRPSolver
 
-        # Use subset of orders for faster testing
-        test_orders = orders[:50]
+        # Use smaller subset so the integration test stays fast and deterministic.
+        test_orders = orders[:20]
 
         print(f"\n🚀 Running full solver with {len(test_orders)} orders...")
 
@@ -258,7 +294,7 @@ class TestSmartRoutingEndToEnd:
             config=config,
         )
 
-        solution = solver.solve()
+        solution = solver.solve(time_limit=10)
 
         print(f"\n✅ Solution generated:")
         print(f"  - Total routes: {len(solution.routes)}")

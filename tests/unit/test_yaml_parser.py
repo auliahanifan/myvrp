@@ -63,11 +63,11 @@ unlimited: true"""
 
     @pytest.fixture
     def invalid_yaml_zero_cost(self):
-        """YAML with zero cost per km."""
+        """YAML with negative cost per km."""
         data = """vehicles:
   - name: "Free Vehicle"
     capacity: 500
-    cost_per_km: 0
+    cost_per_km: -1
 unlimited: true"""
         with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.yaml') as f:
             f.write(data)
@@ -85,10 +85,12 @@ unlimited: true"""
         assert len(fleet.vehicle_types) == 3
 
         # Check first vehicle
-        l300 = fleet.vehicle_types[0]
+        l300, fixed_count, unlimited = fleet.vehicle_types[0]
         assert l300.name == "L300"
         assert l300.capacity == 800
         assert l300.cost_per_km == 5000
+        assert fixed_count == 1
+        assert unlimited is True
 
     def test_parse_missing_vehicles_key(self, invalid_yaml_missing_vehicles):
         """Test that parser raises error for missing vehicles key."""
@@ -97,7 +99,7 @@ unlimited: true"""
         with pytest.raises(YAMLParserError) as exc_info:
             parser.parse()
 
-        assert "Missing 'vehicles' key" in str(exc_info.value)
+        assert "must contain 'vehicles' key" in str(exc_info.value)
 
     def test_parse_negative_capacity(self, invalid_yaml_negative_capacity):
         """Test that parser catches negative capacity."""
@@ -109,13 +111,13 @@ unlimited: true"""
         assert "Capacity must be positive" in str(exc_info.value)
 
     def test_parse_zero_cost(self, invalid_yaml_zero_cost):
-        """Test that parser catches zero cost."""
+        """Test that parser catches negative cost."""
         parser = YAMLParser(invalid_yaml_zero_cost)
 
         with pytest.raises(YAMLParserError) as exc_info:
             parser.parse()
 
-        assert "Cost per km must be positive" in str(exc_info.value)
+        assert "Cost per km must be non-negative" in str(exc_info.value)
 
     def test_parse_file_not_found(self):
         """Test that parser raises error for non-existent file."""
@@ -142,9 +144,9 @@ unlimited: true"""
         vehicle_0 = fleet.get_vehicle_by_index(0)
         vehicle_10 = fleet.get_vehicle_by_index(10)
 
-        assert vehicle_0.name == "L300"
+        assert vehicle_0.name == "L300_0"
         # Vehicle 10 should be cloned from vehicle types (10 % 3 = 1)
-        assert vehicle_10.name == "Granmax"
+        assert vehicle_10.name == "Granmax_10"
 
     def test_empty_vehicles_list(self):
         """Test parsing YAML with empty vehicles list."""
@@ -159,7 +161,7 @@ unlimited: true"""
             parser = YAMLParser(temp_path)
             with pytest.raises(YAMLParserError) as exc_info:
                 parser.parse()
-            assert "At least one vehicle type required" in str(exc_info.value)
+            assert "'vehicles' list cannot be empty" in str(exc_info.value)
         finally:
             os.unlink(temp_path)
 

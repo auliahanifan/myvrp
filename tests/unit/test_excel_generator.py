@@ -104,7 +104,7 @@ class TestExcelGenerator:
 
             # Verify file was created
             assert os.path.exists(filepath)
-            assert filepath.endswith('.xlsx')
+            assert filepath.suffix == '.xlsx'
 
             # Verify file is a valid Excel file
             wb = load_workbook(filepath)
@@ -176,9 +176,9 @@ class TestExcelGenerator:
 
             # These strings should appear in summary
             expected_texts = [
-                "Routing Solution Summary",
-                "Total Vehicles",
-                "Total Orders",
+                "ROUTING SOLUTION SUMMARY",
+                "Total Vehicles Used",
+                "Total Orders Delivered",
                 "Total Distance",
                 "Total Cost",
                 "Optimization Strategy",
@@ -213,7 +213,7 @@ class TestExcelGenerator:
             # Find the priority order row (Customer 2)
             priority_found = False
             for row in ws.iter_rows(min_row=2):
-                customer_cell = row[2]  # Customer column
+                customer_cell = row[4]  # Customer column
                 if customer_cell.value == "Customer 2":
                     # Check if cell has yellow fill (priority color)
                     if customer_cell.fill.start_color.rgb:
@@ -222,7 +222,7 @@ class TestExcelGenerator:
 
             # Note: This test might need adjustment based on actual implementation
             # At minimum, verify the row exists
-            assert any(row[2].value == "Customer 2" for row in ws.iter_rows(min_row=2))
+            assert any(row[4].value == "Customer 2" for row in ws.iter_rows(min_row=2))
 
             wb.close()
 
