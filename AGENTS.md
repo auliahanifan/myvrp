@@ -7,6 +7,20 @@
 # Coding Rules:
 
 1. Keep it simple
+2. Treat UI and backend logic as one vertical slice
+3. Do not change `app.py` without checking the matching application service, test, and output flow
+
+## Architecture Rules
+
+1. `app.py` is a Streamlit UI shell only
+2. Business orchestration belongs in `src/application/`
+3. Streamlit state and display helpers belong in `src/presentation/`
+4. `app.py` must not import solver, parser, distance-calculation, output-generator, or map-visualizer modules directly
+5. Any change to route generation flow must be reflected in:
+   - UI entrypoint
+   - application service contract or orchestration
+   - relevant tests
+6. Prefer vertical-slice changes over layer-only edits
 
 ### High-Level Purpose
 
