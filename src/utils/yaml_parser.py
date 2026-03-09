@@ -108,6 +108,7 @@ class YAMLParser:
                 multiple_trips=multiple_trips,
                 relax_time_windows=relax_time_windows,
                 time_window_relaxation_minutes=time_window_relaxation_minutes,
+                unlimited=self.data.get("unlimited", False),
             )
         except Exception as e:
             raise YAMLParserError(f"Error creating vehicle fleet: {str(e)}")
@@ -490,7 +491,7 @@ class YAMLParser:
             raise ValueError("Vehicle data must be a dictionary")
 
         # Check required fields
-        required_fields = ["name", "capacity", "cost_per_km", "fixed_count"]
+        required_fields = ["name", "capacity", "cost_per_km"]
         for field in required_fields:
             if field not in vehicle_data:
                 raise ValueError(f"Missing required field: {field}")
@@ -510,15 +511,16 @@ class YAMLParser:
         except (ValueError, TypeError):
             raise ValueError(f"Invalid cost_per_km: {vehicle_data['cost_per_km']}")
 
+        fixed_count_raw = vehicle_data.get("fixed_count", 1)
         try:
-            fixed_count = int(vehicle_data["fixed_count"])
+            fixed_count = int(fixed_count_raw)
             if fixed_count <= 0:
                 raise ValueError("fixed_count must be positive")
         except (ValueError, TypeError):
-            raise ValueError(f"Invalid fixed_count: {vehicle_data['fixed_count']}")
+            raise ValueError(f"Invalid fixed_count: {fixed_count_raw}")
 
         # Parse unlimited flag (optional, defaults to False)
-        unlimited = vehicle_data.get("unlimited", False)
+        unlimited = vehicle_data.get("unlimited", self.data.get("unlimited", False))
         if not isinstance(unlimited, bool):
             raise ValueError("'unlimited' must be a boolean value")
 

@@ -1,6 +1,7 @@
 """Unit tests for distance calculator."""
 import pytest
 import numpy as np
+import requests
 from unittest.mock import Mock, patch, MagicMock
 from src.utils.distance_calculator import DistanceCalculator, DistanceCalculatorError
 from src.models.location import Location, Depot
@@ -70,7 +71,7 @@ class TestDistanceCalculator:
         """Test handling of API errors."""
         mock_get.side_effect = requests.exceptions.RequestException("API Error")
 
-        calc = DistanceCalculator(cache_dir="/tmp/test_cache")
+        calc = DistanceCalculator(cache_dir="/tmp/test_cache", enable_cache=False)
         dist_matrix, dur_matrix = calc.calculate_matrix(sample_locations)
         
         assert calc.haversine_fallbacks == 1
@@ -85,7 +86,7 @@ class TestDistanceCalculator:
         mock_response.text = "Internal Server Error"
         mock_get.return_value = mock_response
 
-        calc = DistanceCalculator(cache_dir="/tmp/test_cache")
+        calc = DistanceCalculator(cache_dir="/tmp/test_cache", enable_cache=False)
         dist_matrix, dur_matrix = calc.calculate_matrix(sample_locations)
 
         assert calc.haversine_fallbacks == 1
@@ -100,7 +101,7 @@ class TestDistanceCalculator:
         mock_response.json.return_value = {"code": "InvalidQuery", "message": "Invalid query"}
         mock_get.return_value = mock_response
 
-        calc = DistanceCalculator(cache_dir="/tmp/test_cache")
+        calc = DistanceCalculator(cache_dir="/tmp/test_cache", enable_cache=False)
         dist_matrix, dur_matrix = calc.calculate_matrix(sample_locations)
 
         assert calc.haversine_fallbacks == 1
@@ -184,14 +185,14 @@ class TestDistanceCalculator:
         }
         mock_get.return_value = mock_response
 
-        calc = DistanceCalculator(cache_dir="/tmp/test_cache")
+        calc = DistanceCalculator(cache_dir="/tmp/test_cache", enable_cache=False)
         calc.calculate_matrix(sample_locations)
 
         assert mock_get.called
         call_args = mock_get.call_args
 
         coords_str = ";".join(f"{loc.longitude},{loc.latitude}" for loc in sample_locations)
-        expected_url = f"http://osrm.segarloka.cc/table/v1/car/{coords_str}"
+        expected_url = f"https://osrm.segarloka.cc/table/v1/car/{coords_str}"
         assert call_args[0][0] == expected_url
 
         params = call_args[1]["params"]
@@ -206,4 +207,4 @@ class TestDistanceCalculator:
 
         distance = calc._haversine_distance(jakarta, bandung)
 
-        assert 140 <= distance <= 160
+        assert 110 <= distance <= 130

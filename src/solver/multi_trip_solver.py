@@ -15,6 +15,7 @@ from ..models.order import Order
 from ..models.route import Route, RoutingSolution
 from ..models.vehicle import Vehicle, VehicleFleet
 from ..utils.time_window_clustering import TimeWindowCluster, TimeWindowClusterer
+from .matrix_slicer import MatrixSlicer
 from .vrp_solver import VRPSolver, VRPSolverError
 
 
@@ -185,16 +186,11 @@ class MultiTripSolver:
         source: str,
     ) -> RoutingSolution:
         """Solve a single cluster with full fleet available."""
-        # Build order index mapping: cluster order index -> original order index
-        order_index_map = {
-            self.orders.index(order): i for i, order in enumerate(cluster.orders)
-        }
-
         # Extract submatrix for cluster orders
         # Indices: 0 (depot) + cluster order indices in original matrix
         original_indices = [0] + [self.orders.index(o) + 1 for o in cluster.orders]
-        sub_distance = self._extract_submatrix(self.distance_matrix, original_indices)
-        sub_duration = self._extract_submatrix(self.duration_matrix, original_indices)
+        sub_distance = MatrixSlicer.extract_submatrix(self.distance_matrix, original_indices)
+        sub_duration = MatrixSlicer.extract_submatrix(self.duration_matrix, original_indices)
 
         solver = VRPSolver(
             orders=cluster.orders,
@@ -219,17 +215,6 @@ class MultiTripSolver:
                 optimization_strategy=optimization_strategy,
                 computation_time=0,
             )
-
-    def _extract_submatrix(
-        self, matrix: np.ndarray, indices: List[int]
-    ) -> np.ndarray:
-        """Extract submatrix for given indices."""
-        n = len(indices)
-        submatrix = np.zeros((n, n))
-        for i, idx_i in enumerate(indices):
-            for j, idx_j in enumerate(indices):
-                submatrix[i, j] = matrix[idx_i, idx_j]
-        return submatrix
 
     def _assign_physical_vehicles(
         self,
@@ -321,6 +306,12 @@ class MultiTripSolver:
                 print(f"  {pv.physical_id}: {', '.join(trip_times)}")
 
         return all_routes
+
+    def _extract_submatrix(
+        self, matrix: np.ndarray, indices: List[int]
+    ) -> np.ndarray:
+        """Backward-compatible wrapper around the shared matrix slicer utility."""
+        return MatrixSlicer.extract_submatrix(matrix, indices)
 
     def _get_vehicle_type(self, vehicle_name: str) -> str:
         """Extract base vehicle type from vehicle name (remove trailing ID)."""

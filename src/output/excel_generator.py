@@ -61,7 +61,8 @@ class ExcelGenerator:
         Raises:
             ValueError: If solution has no routes
         """
-        if not solution.routes or solution.total_vehicles_used == 0:
+        has_active_routes = any(route.num_stops > 0 for route in solution.routes)
+        if not has_active_routes and not solution.unassigned_orders:
             raise ValueError("Cannot generate Excel for empty solution")
 
         # Create output directory if it doesn't exist
@@ -73,7 +74,11 @@ class ExcelGenerator:
             timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
             filename = f"routing_result_{timestamp}"
 
-        filepath = output_path / f"{filename}.xlsx"
+        filename_path = Path(filename)
+        if filename_path.suffix.lower() != ".xlsx":
+            filename_path = filename_path.with_suffix(".xlsx")
+
+        filepath = output_path / filename_path
 
         # Create workbook
         self.wb = Workbook()
