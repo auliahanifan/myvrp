@@ -273,3 +273,17 @@ def test_route_planning_service_orchestrates_full_pipeline(tmp_path: Path):
     assert result.csv_path.name == "routing_result_2025-10-10_08-40-08.csv"
     assert result.csv_summary_path.name == "routing_summary_2025-10-10_08-40-08.csv"
     assert result.hub_summary["direct_orders_count"] == 1
+
+
+def test_route_planning_service_parses_uploaded_orders_with_fragile_columns():
+    from src.application.route_planning_service import RoutePlanningService
+
+    csv_bytes = b"""sale_order_id,delivery_date,delivery_time,load_weight_in_kg,partner_id,display_name,alamat,partner_latitude,partner_longitude,is_priority,is_fragile_product_exist,fragile_order_lines\nSO-10,2025-10-08,04:00-05:00,25.0,P-10,Uploaded Customer,Address,-6.21,106.85,false,true,\"{\"\"Telur Omega (Kg)\"\"}\"\n"""
+
+    service = RoutePlanningService()
+
+    result = service.parse_uploaded_orders(csv_bytes, "orders.csv")
+
+    assert result.total_orders == 1
+    assert result.orders[0].fragile_order_lines == ("Telur Omega (Kg)",)
+    assert result.orders[0].has_fragile_items is True

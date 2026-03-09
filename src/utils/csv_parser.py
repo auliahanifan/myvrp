@@ -3,7 +3,9 @@ CSV parser for order data.
 Parses order CSV files and creates Order objects with validation.
 """
 
+import ast
 import pandas as pd
+import re
 from typing import List, Tuple
 from ..models.order import Order
 
@@ -41,6 +43,7 @@ class CSVParser:
 
     COORDINATE_COLUMNS_COMBINED = ["coordinates"]
     COORDINATE_COLUMNS_SEPARATE = ["partner_latitude", "partner_longitude"]
+    EMPTY_FRAGILE_MARKERS = {"", "{}", "[]", "set()", "nan", "none", "null"}
 
     def __init__(self, csv_path: str):
         """
@@ -157,6 +160,12 @@ class CSVParser:
         if "is_priority" in row and not pd.isna(row["is_priority"]):
             is_priority = self._parse_boolean(row["is_priority"])
 
+        fragile_order_lines = ()
+        if "fragile_order_lines" in row and not pd.isna(row["fragile_order_lines"]):
+            fragile_order_lines = self._parse_fragile_order_lines(
+                row["fragile_order_lines"]
+            )
+
         # Parse kelurahan (optional)
         kelurahan = None
         if "kelurahan" in row and not pd.isna(row["kelurahan"]):
@@ -185,6 +194,7 @@ class CSVParser:
             kelurahan=kelurahan,
             kecamatan=kecamatan,
             kota=kota,
+            fragile_order_lines=fragile_order_lines,
             is_priority=is_priority,
         )
 
@@ -276,6 +286,49 @@ class CSVParser:
             return value in ("true", "1", "yes", "y")
 
         return False
+
+    def _parse_fragile_order_lines(self, value) -> Tuple[str, ...]:
+        """Parse fragile_order_lines into a normalized tuple of item labels."""
+        raw_value = str(value).strip()
+        if raw_value.lower() in self.EMPTY_FRAGILE_MARKERS:
+            return ()
+
+        parsed_items = self._parse_fragile_literal(raw_value)
+        if parsed_items:
+            return parsed_items
+
+        quoted_items = tuple(
+            item.strip()
+            for item in re.findall(r'"([^"]+)"', raw_value)
+            if item.strip()
+        )
+        if quoted_items:
+            return quoted_items
+
+        return (raw_value,)
+
+    def _parse_fragile_literal(self, raw_value: str) -> Tuple[str, ...]:
+        """Parse Python-like collection literals emitted by exported CSV data."""
+        try:
+            parsed_value = ast.literal_eval(raw_value)
+        except (ValueError, SyntaxError):
+            return ()
+
+        if isinstance(parsed_value, dict):
+            return tuple(
+                str(item).strip()
+                for item in parsed_value.keys()
+                if str(item).strip()
+            )
+        if isinstance(parsed_value, (list, tuple, set)):
+            return tuple(
+                str(item).strip()
+                for item in parsed_value
+                if str(item).strip()
+            )
+        if isinstance(parsed_value, str) and parsed_value.strip():
+            return (parsed_value.strip(),)
+        return ()
 
     def get_summary(self) -> dict:
         """

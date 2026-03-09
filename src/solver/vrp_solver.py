@@ -2,6 +2,7 @@
 VRP Solver using Google OR-Tools.
 Solves Capacitated Vehicle Routing Problem with Time Windows (CVRPTW).
 """
+from dataclasses import dataclass
 from ortools.constraint_solver import routing_enums_pb2
 from ortools.constraint_solver import pywrapcp
 import numpy as np
@@ -9,6 +10,7 @@ from typing import List, Tuple
 import time as time_module
 
 from ..models.order import Order
+from ..models.vehicle import Vehicle
 from ..models.vehicle import VehicleFleet
 from ..models.location import Location, Depot
 from ..models.route import Route, RouteStop, RoutingSolution
@@ -17,6 +19,13 @@ from ..models.route import Route, RouteStop, RoutingSolution
 class VRPSolverError(Exception):
     """Custom exception for VRP solver errors."""
     pass
+
+
+@dataclass(frozen=True)
+class SolverVehicleSpec:
+    vehicle: Vehicle
+    allows_fragile: bool
+    is_motor: bool
 
 
 class VRPSolver:
@@ -28,6 +37,8 @@ class VRPSolver:
 
     # Service time per location (in minutes)
     SERVICE_TIME = 15
+    MOTOR_FRAGILE_CAPACITY_KG = 80
+    MOTOR_STANDARD_CAPACITY_KG = 120
 
     def __init__(
         self,
@@ -76,8 +87,11 @@ class VRPSolver:
                 f"number of locations {n_locations}"
             )
 
-        # Get all vehicles from fleet with offset
-        self.vehicles = fleet.get_all_vehicles(start_id=vehicle_id_offset)
+        self.base_vehicle_count = self._get_base_vehicle_count()
+        self.solver_vehicle_specs, self.shared_motor_variant_pairs = (
+            self._build_solver_vehicle_specs()
+        )
+        self.vehicles = [spec.vehicle for spec in self.solver_vehicle_specs]
 
         # Create a list of unique cities and a mapping from location to city index
         self.cities = sorted(list(set(o.kota for o in orders if o.kota)))
@@ -111,12 +125,8 @@ class VRPSolver:
         """
         start_time = time_module.time()
 
-        # Determine number of vehicles to use
-        # Start with fixed vehicles, add buffer if unlimited available
-        num_vehicles = len(self.vehicles)
-        if self.fleet.has_unlimited():
-            # Add extra capacity if we have unlimited vehicles
-            num_vehicles = min(num_vehicles + len(self.orders), num_vehicles + 50)
+        # Determine number of solver vehicles after expanding shared motor variants.
+        num_vehicles = len(self.solver_vehicle_specs)
 
         # Create routing index manager
         self.manager = pywrapcp.RoutingIndexManager(
@@ -137,6 +147,7 @@ class VRPSolver:
         self._add_capacity_constraint()
         self._add_time_window_constraint()
         self._add_city_constraint()
+        self._add_motor_fragile_constraints()
 
         # Allow dropping nodes (orders) if they can't be satisfied
         # This prevents the solver from failing completely
@@ -241,8 +252,8 @@ class VRPSolver:
         """Add vehicle capacity constraint."""
         # Get capacities for each vehicle (in grams)
         capacities = [
-            int(self.fleet.get_vehicle_by_index(i).capacity * 1000)
-            for i in range(self.routing.vehicles())
+            int(spec.vehicle.capacity * 1000)
+            for spec in self.solver_vehicle_specs
         ]
 
         self.routing.AddDimensionWithVehicleCapacity(
@@ -304,6 +315,9 @@ class VRPSolver:
 
     def _add_city_constraint(self):
         """Add constraint to limit the number of cities per vehicle to 2."""
+        if not self.config.get("constraints", {}).get("enforce_city_limit", True):
+            return
+
         num_cities = len(self.cities)
         if num_cities == 0:
             return
@@ -341,6 +355,34 @@ class VRPSolver:
 
             if cities_visited_for_vehicle:
                 solver.Add(solver.Sum(cities_visited_for_vehicle) <= 2)
+
+    def _add_motor_fragile_constraints(self):
+        """Restrict fragile orders to 80kg motor variants while sharing physical motor slots."""
+        if not self.shared_motor_variant_pairs:
+            return
+
+        solver = self.routing.solver()
+
+        fragile_compatible_vehicle_ids = [
+            vehicle_id
+            for vehicle_id, spec in enumerate(self.solver_vehicle_specs)
+            if spec.allows_fragile
+        ]
+
+        for order_idx, order in enumerate(self.orders, start=1):
+            if not order.has_fragile_items:
+                continue
+            self.routing.SetAllowedVehiclesForIndex(
+                fragile_compatible_vehicle_ids,
+                self.manager.NodeToIndex(order_idx),
+            )
+
+        for fragile_variant_id, standard_variant_id in self.shared_motor_variant_pairs:
+            solver.Add(
+                self.routing.ActiveVehicleVar(fragile_variant_id)
+                + self.routing.ActiveVehicleVar(standard_variant_id)
+                <= 1
+            )
 
     def _get_search_parameters(
         self, optimization_strategy: str, time_limit: int
@@ -484,7 +526,7 @@ class VRPSolver:
         Returns:
             Route object
         """
-        vehicle = self.fleet.get_vehicle_by_index(vehicle_id)
+        vehicle = self.solver_vehicle_specs[vehicle_id].vehicle
         route = Route(vehicle=vehicle)
 
         index = self.routing.Start(vehicle_id)
@@ -536,3 +578,67 @@ class VRPSolver:
             route.total_cost = route.total_distance * route.vehicle.cost_per_km
 
         return route
+
+    def _get_base_vehicle_count(self) -> int:
+        """Return the number of physical vehicle slots before motor variant expansion."""
+        base_vehicle_count = len(self.fleet.get_all_vehicles())
+        if self.fleet.has_unlimited():
+            return min(base_vehicle_count + len(self.orders), base_vehicle_count + 50)
+        return base_vehicle_count
+
+    def _build_solver_vehicle_specs(self) -> tuple[list[SolverVehicleSpec], list[tuple[int, int]]]:
+        """Expand motors into 80kg/120kg solver variants that share one physical slot."""
+        specs: list[SolverVehicleSpec] = []
+        shared_pairs: list[tuple[int, int]] = []
+
+        for vehicle_index in range(self.base_vehicle_count):
+            vehicle = self.fleet.get_vehicle_by_index(vehicle_index)
+            if not self._is_motor_vehicle(vehicle):
+                specs.append(
+                    SolverVehicleSpec(
+                        vehicle=vehicle,
+                        allows_fragile=True,
+                        is_motor=False,
+                    )
+                )
+                continue
+
+            fragile_variant_id = len(specs)
+            specs.append(
+                SolverVehicleSpec(
+                    vehicle=self._clone_vehicle_with_capacity(
+                        vehicle,
+                        self.MOTOR_FRAGILE_CAPACITY_KG,
+                    ),
+                    allows_fragile=True,
+                    is_motor=True,
+                )
+            )
+            standard_variant_id = len(specs)
+            specs.append(
+                SolverVehicleSpec(
+                    vehicle=self._clone_vehicle_with_capacity(
+                        vehicle,
+                        self.MOTOR_STANDARD_CAPACITY_KG,
+                    ),
+                    allows_fragile=False,
+                    is_motor=True,
+                )
+            )
+            shared_pairs.append((fragile_variant_id, standard_variant_id))
+
+        return specs, shared_pairs
+
+    def _clone_vehicle_with_capacity(self, vehicle: Vehicle, capacity: float) -> Vehicle:
+        """Clone a vehicle while preserving its identity and pricing."""
+        return Vehicle(
+            name=vehicle.name,
+            capacity=capacity,
+            cost_per_km=vehicle.cost_per_km,
+            vehicle_id=vehicle.vehicle_id,
+            fixed_cost=vehicle.fixed_cost,
+        )
+
+    def _is_motor_vehicle(self, vehicle: Vehicle) -> bool:
+        """Detect whether a vehicle should follow motor-only fragile capacity rules."""
+        return "motor" in vehicle.name.lower()

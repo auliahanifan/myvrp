@@ -141,6 +141,57 @@ ORDER001,2025-10-08,04:00-05:00,-10.0,P001,Customer A,Address A,-6.2088,106.8456
         assert orders[1].is_priority is True
         assert orders[2].is_priority is False
 
+    def test_parse_empty_fragile_order_lines_as_non_fragile(self):
+        """Test that empty fragile_order_lines does not mark order as fragile."""
+        data = """sale_order_id,delivery_date,delivery_time,load_weight_in_kg,partner_id,display_name,alamat,partner_latitude,partner_longitude,is_priority,fragile_order_lines
+ORDER001,2025-10-08,04:00-05:00,50.0,P001,Customer A,Address A,-6.2088,106.8456,false,{}"""
+
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.csv') as f:
+            f.write(data)
+            temp_path = f.name
+
+        try:
+            parser = CSVParser(temp_path)
+            orders = parser.parse()
+            assert orders[0].fragile_order_lines == ()
+            assert orders[0].has_fragile_items is False
+        finally:
+            os.unlink(temp_path)
+
+    def test_parse_non_empty_fragile_order_lines_as_fragile(self):
+        """Test that non-empty fragile_order_lines marks order as fragile."""
+        data = """sale_order_id,delivery_date,delivery_time,load_weight_in_kg,partner_id,display_name,alamat,partner_latitude,partner_longitude,is_priority,fragile_order_lines
+ORDER001,2025-10-08,04:00-05:00,50.0,P001,Customer A,Address A,-6.2088,106.8456,false,"{""Telur Omega (Kg)""}" """
+
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.csv') as f:
+            f.write(data)
+            temp_path = f.name
+
+        try:
+            parser = CSVParser(temp_path)
+            orders = parser.parse()
+            assert orders[0].fragile_order_lines == ("Telur Omega (Kg)",)
+            assert orders[0].has_fragile_items is True
+        finally:
+            os.unlink(temp_path)
+
+    def test_parse_ignores_is_fragile_product_exist_mismatch(self):
+        """Test that fragile_order_lines remains the only routing source of truth."""
+        data = """sale_order_id,delivery_date,delivery_time,load_weight_in_kg,partner_id,display_name,alamat,partner_latitude,partner_longitude,is_priority,is_fragile_product_exist,fragile_order_lines
+ORDER001,2025-10-08,04:00-05:00,50.0,P001,Customer A,Address A,-6.2088,106.8456,false,true,{}"""
+
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.csv') as f:
+            f.write(data)
+            temp_path = f.name
+
+        try:
+            parser = CSVParser(temp_path)
+            orders = parser.parse()
+            assert orders[0].fragile_order_lines == ()
+            assert orders[0].has_fragile_items is False
+        finally:
+            os.unlink(temp_path)
+
     def test_parse_empty_csv(self):
         """Test parsing empty CSV file."""
         data = """sale_order_id,delivery_date,delivery_time,load_weight_in_kg,partner_id,display_name,alamat,partner_latitude,partner_longitude,is_priority"""

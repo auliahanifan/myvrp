@@ -11,6 +11,26 @@ from src.models.route import RoutingSolution
 class TestVRPSolver:
     """Test suite for VRPSolver class."""
 
+    def _make_order(
+        self,
+        sale_order_id: str,
+        weight: float,
+        coordinates: tuple[float, float],
+        delivery_time: str = "04:00-08:00",
+        fragile_order_lines: tuple[str, ...] = (),
+    ) -> Order:
+        return Order(
+            sale_order_id=sale_order_id,
+            delivery_date="2025-10-08",
+            delivery_time=delivery_time,
+            load_weight_in_kg=weight,
+            partner_id=f"P-{sale_order_id}",
+            display_name=f"Customer {sale_order_id}",
+            alamat=f"Address {sale_order_id}",
+            coordinates=coordinates,
+            fragile_order_lines=fragile_order_lines,
+        )
+
     @pytest.fixture
     def sample_depot(self):
         """Create sample depot."""
@@ -353,3 +373,197 @@ class TestVRPSolver:
             assert route.total_cost > 0
             assert route.total_weight > 0
             assert route.total_weight <= route.vehicle.capacity  # Capacity not exceeded
+
+    def test_solver_mixed_motor_route_uses_80kg_when_fragile_present(self, sample_depot):
+        """Fragile and non-fragile orders may share a motor route only under 80kg total."""
+        orders = [
+            self._make_order(
+                sale_order_id="F001",
+                weight=30.0,
+                coordinates=(-6.2100, 106.8500),
+                fragile_order_lines=("Telur",),
+            ),
+            self._make_order(
+                sale_order_id="N001",
+                weight=40.0,
+                coordinates=(-6.2110, 106.8510),
+            ),
+        ]
+        fleet = VehicleFleet(
+            vehicle_types=[(Vehicle(name="Sepeda Motor", capacity=80, cost_per_km=1500), 1, False)]
+        )
+        dist_matrix = np.array([
+            [0.0, 5.0, 6.0],
+            [5.0, 0.0, 1.0],
+            [6.0, 1.0, 0.0],
+        ])
+        dur_matrix = np.array([
+            [0.0, 10.0, 11.0],
+            [10.0, 0.0, 5.0],
+            [11.0, 5.0, 0.0],
+        ])
+
+        solution = VRPSolver(
+            orders=orders,
+            fleet=fleet,
+            depot=sample_depot,
+            distance_matrix=dist_matrix,
+            duration_matrix=dur_matrix,
+            config={"constraints": {"enforce_city_limit": False}},
+        ).solve(optimization_strategy="balanced", time_limit=10)
+
+        assert solution.total_orders_delivered == 2
+        assert len(solution.routes) == 1
+        assert solution.routes[0].vehicle.capacity == 80
+        assert solution.routes[0].total_weight == 70.0
+
+    def test_solver_non_fragile_motor_route_can_use_120kg_variant(self, sample_depot):
+        """Non-fragile-only motor routes may use the 120kg motor variant."""
+        orders = [
+            self._make_order(
+                sale_order_id="N001",
+                weight=55.0,
+                coordinates=(-6.2100, 106.8500),
+            ),
+            self._make_order(
+                sale_order_id="N002",
+                weight=45.0,
+                coordinates=(-6.2110, 106.8510),
+            ),
+        ]
+        fleet = VehicleFleet(
+            vehicle_types=[(Vehicle(name="Sepeda Motor", capacity=80, cost_per_km=1500), 1, False)]
+        )
+        dist_matrix = np.array([
+            [0.0, 5.0, 6.0],
+            [5.0, 0.0, 1.0],
+            [6.0, 1.0, 0.0],
+        ])
+        dur_matrix = np.array([
+            [0.0, 10.0, 11.0],
+            [10.0, 0.0, 5.0],
+            [11.0, 5.0, 0.0],
+        ])
+
+        solution = VRPSolver(
+            orders=orders,
+            fleet=fleet,
+            depot=sample_depot,
+            distance_matrix=dist_matrix,
+            duration_matrix=dur_matrix,
+            config={"constraints": {"enforce_city_limit": False}},
+        ).solve(optimization_strategy="balanced", time_limit=10)
+
+        assert solution.total_orders_delivered == 2
+        assert len(solution.routes) == 1
+        assert solution.routes[0].vehicle.capacity == 120
+        assert solution.routes[0].total_weight == 100.0
+
+    def test_solver_fragile_order_cannot_use_120kg_motor_variant(self, sample_depot):
+        """Fragile orders should remain unassigned when only 120kg-equivalent motor fit exists."""
+        orders = [
+            self._make_order(
+                sale_order_id="F001",
+                weight=90.0,
+                coordinates=(-6.2100, 106.8500),
+                fragile_order_lines=("Telur",),
+            ),
+        ]
+        fleet = VehicleFleet(
+            vehicle_types=[(Vehicle(name="Sepeda Motor", capacity=80, cost_per_km=1500), 1, False)]
+        )
+        dist_matrix = np.array([[0.0, 5.0], [5.0, 0.0]])
+        dur_matrix = np.array([[0.0, 10.0], [10.0, 0.0]])
+
+        solution = VRPSolver(
+            orders=orders,
+            fleet=fleet,
+            depot=sample_depot,
+            distance_matrix=dist_matrix,
+            duration_matrix=dur_matrix,
+            config={"constraints": {"enforce_city_limit": False}},
+        ).solve(optimization_strategy="balanced", time_limit=10)
+
+        assert solution.total_orders_delivered == 0
+        assert [order.sale_order_id for order in solution.unassigned_orders] == ["F001"]
+
+    def test_solver_fragile_order_can_use_non_motor_vehicle(self, sample_depot):
+        """Fragile orders may still be assigned to non-motor vehicles."""
+        orders = [
+            self._make_order(
+                sale_order_id="F001",
+                weight=90.0,
+                coordinates=(-6.2100, 106.8500),
+                fragile_order_lines=("Telur",),
+            ),
+        ]
+        fleet = VehicleFleet(
+            vehicle_types=[
+                (Vehicle(name="City Car", capacity=250, cost_per_km=4000), 1, False),
+                (Vehicle(name="Sepeda Motor", capacity=80, cost_per_km=1500), 1, False),
+            ]
+        )
+        dist_matrix = np.array([[0.0, 5.0], [5.0, 0.0]])
+        dur_matrix = np.array([[0.0, 10.0], [10.0, 0.0]])
+
+        solution = VRPSolver(
+            orders=orders,
+            fleet=fleet,
+            depot=sample_depot,
+            distance_matrix=dist_matrix,
+            duration_matrix=dur_matrix,
+            config={"constraints": {"enforce_city_limit": False}},
+        ).solve(optimization_strategy="balanced", time_limit=10)
+
+        assert solution.total_orders_delivered == 1
+        assert len(solution.routes) == 1
+        assert solution.routes[0].vehicle.name.startswith("City Car")
+
+    def test_solver_shared_motor_pool_prevents_using_both_variants(self, sample_depot):
+        """One physical motor slot cannot be consumed by both 80kg and 120kg variants."""
+        orders = [
+            self._make_order(
+                sale_order_id="F001",
+                weight=50.0,
+                coordinates=(-6.2100, 106.8500),
+                delivery_time="04:00-04:15",
+                fragile_order_lines=("Telur",),
+            ),
+            self._make_order(
+                sale_order_id="N001",
+                weight=50.0,
+                coordinates=(-6.2500, 106.8900),
+                delivery_time="04:00-04:15",
+            ),
+        ]
+        fleet = VehicleFleet(
+            vehicle_types=[(Vehicle(name="Sepeda Motor", capacity=80, cost_per_km=1500), 1, False)]
+        )
+        dist_matrix = np.array([
+            [0.0, 5.0, 20.0],
+            [5.0, 0.0, 20.0],
+            [20.0, 20.0, 0.0],
+        ])
+        dur_matrix = np.array([
+            [0.0, 10.0, 50.0],
+            [10.0, 0.0, 50.0],
+            [50.0, 50.0, 0.0],
+        ])
+
+        solution = VRPSolver(
+            orders=orders,
+            fleet=fleet,
+            depot=sample_depot,
+            distance_matrix=dist_matrix,
+            duration_matrix=dur_matrix,
+            config={
+                "constraints": {"enforce_city_limit": False},
+                "routing": {
+                    "priority_time_tolerance": 0,
+                    "non_priority_time_tolerance": 0,
+                },
+            },
+        ).solve(optimization_strategy="balanced", time_limit=10)
+
+        assert solution.total_orders_delivered == 1
+        assert len(solution.unassigned_orders) == 1

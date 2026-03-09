@@ -34,6 +34,7 @@ class Order:
     kelurahan: Optional[str] = None
     kecamatan: Optional[str] = None
     kota: Optional[str] = None
+    fragile_order_lines: Tuple[str, ...] = ()
     is_priority: bool = False
 
     def __post_init__(self):
@@ -163,6 +164,11 @@ class Order:
         return max(0, self.time_window_start - 30)
 
     @property
+    def has_fragile_items(self) -> bool:
+        """Return True when the order contains fragile items."""
+        return len(self.fragile_order_lines) > 0
+
+    @property
     def latitude(self) -> float:
         """Get latitude from coordinates."""
         return self.coordinates[0]
@@ -179,7 +185,8 @@ class Order:
     def __repr__(self) -> str:
         """String representation of the order."""
         priority_flag = " [PRIORITY]" if self.is_priority else ""
+        fragile_flag = " [FRAGILE]" if self.has_fragile_items else ""
         return (
             f"Order({self.sale_order_id}, {self.display_name}, {self.kota}, "
-            f"{self.load_weight_in_kg}kg, {self.delivery_time}{priority_flag})"
+            f"{self.load_weight_in_kg}kg, {self.delivery_time}{priority_flag}{fragile_flag})"
         )
