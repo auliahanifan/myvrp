@@ -79,6 +79,7 @@ class ResultsService:
                         "Cumulative Weight (kg)": f"{stop.cumulative_weight:.1f}",
                         "Distance (km)": f"{stop.distance_from_prev:.2f}",
                         "Priority": "✅" if order.is_priority else "",
+                        "Fragile Order Lines": ", ".join(order.fragile_order_lines),
                     }
                 )
                 previous_location = order.display_name

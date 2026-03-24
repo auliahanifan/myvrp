@@ -15,6 +15,7 @@ def _make_order(
     sale_order_id: str = "SO-1",
     name: str = "Customer A",
     is_priority: bool = False,
+    fragile_order_lines: tuple[str, ...] = (),
 ) -> Order:
     return Order(
         sale_order_id=sale_order_id,
@@ -28,6 +29,7 @@ def _make_order(
         kota="Jakarta",
         kecamatan="Kebayoran",
         kelurahan="Senayan",
+        fragile_order_lines=fragile_order_lines,
         is_priority=is_priority,
     )
 
@@ -60,7 +62,12 @@ def _make_solution() -> RoutingSolution:
         vehicle=Vehicle(name="Motor", capacity=80.0, cost_per_km=2500.0),
         departure_time=210,
     )
-    priority_order = _make_order("SO-2", "Priority Customer", is_priority=True)
+    priority_order = _make_order(
+        "SO-2",
+        "Priority Customer",
+        is_priority=True,
+        fragile_order_lines=("Telur Omega (Kg)", "Kaca Botol"),
+    )
     regular_order = _make_order("SO-3", "Regular Customer", is_priority=False)
     route.stops = [
         RouteStop(
@@ -145,6 +152,9 @@ def test_results_service_builds_metrics_and_rows():
     assert metrics["total_orders"] == 2
     assert route_rows[0]["Vehicle"] == "Motor"
     assert route_rows[0]["Priority"] == "✅"
+    assert list(route_rows[0]).index("Fragile Order Lines") == list(route_rows[0]).index("Priority") + 1
+    assert route_rows[0]["Fragile Order Lines"] == "Telur Omega (Kg), Kaca Botol"
+    assert route_rows[1]["Fragile Order Lines"] == ""
     assert unassigned_rows[0]["Customer"] == "Unassigned Customer"
 
 
