@@ -14,7 +14,12 @@ from src.application.map_service import MapService
 from src.application.results_service import ResultsService
 from src.application.route_planning_service import RoutePlanningService
 from src.presentation.streamlit_state import StreamlitState
-from src.presentation.streamlit_view_models import preview_dataframe, records_dataframe
+from src.presentation.streamlit_view_models import (
+    preview_dataframe,
+    records_dataframe,
+    vehicle_editor_rows,
+    vehicle_summary_lines,
+)
 
 
 configuration_service = ConfigurationService()
@@ -94,39 +99,67 @@ def render_header():
 def _render_vehicle_editor(state):
     config = state.vehicle_config
     vehicles_to_remove = []
+    rows = vehicle_editor_rows(config["vehicles"])
 
     st.markdown("**Tipe Kendaraan**")
-    for idx, vehicle_config in enumerate(config["vehicles"]):
+    if any(row["capacity_locked"] for row in rows):
+        st.caption(
+            "Sepeda motor ditampilkan sebagai dua varian berbagi pool armada yang sama: "
+            "80 kg untuk order fragile dan 120 kg untuk order non-fragile."
+        )
+
+    for row in rows:
+        source_index = row["source_index"]
+        vehicle_config = config["vehicles"][source_index]
+        widget_key = row["display_key"]
         with st.container():
             header_cols = st.columns([4, 1])
             with header_cols[0]:
+                st.markdown(f"**{row['display_name']}**")
                 new_name = st.text_input(
                     "Nama",
                     value=vehicle_config["name"],
-                    key=f"vehicle_name_{idx}",
+                    key=f"vehicle_name_{widget_key}",
                     label_visibility="collapsed",
+                    disabled=row["capacity_locked"] and not row["remove_allowed"],
                 )
                 if new_name != vehicle_config["name"]:
-                    config["vehicles"][idx]["name"] = new_name
+                    config["vehicles"][source_index]["name"] = new_name
                     state.config_modified = True
 
             with header_cols[1]:
-                if st.button("X", key=f"remove_vehicle_{idx}", help="Remove this vehicle type"):
-                    vehicles_to_remove.append(idx)
+                if row["remove_allowed"]:
+                    if st.button(
+                        "X",
+                        key=f"remove_vehicle_{widget_key}",
+                        help="Remove this vehicle type",
+                    ):
+                        vehicles_to_remove.append(source_index)
 
             prop_cols = st.columns(4)
             with prop_cols[0]:
-                new_capacity = st.number_input(
-                    "Capacity (kg)",
-                    min_value=1.0,
-                    max_value=10000.0,
-                    value=float(vehicle_config["capacity"]),
-                    step=10.0,
-                    key=f"vehicle_capacity_{idx}",
-                )
-                if new_capacity != vehicle_config["capacity"]:
-                    config["vehicles"][idx]["capacity"] = new_capacity
-                    state.config_modified = True
+                if row["capacity_locked"]:
+                    st.number_input(
+                        "Capacity (kg)",
+                        min_value=1.0,
+                        max_value=10000.0,
+                        value=float(row["capacity"]),
+                        step=10.0,
+                        key=f"vehicle_capacity_{widget_key}",
+                        disabled=True,
+                    )
+                else:
+                    new_capacity = st.number_input(
+                        "Capacity (kg)",
+                        min_value=1.0,
+                        max_value=10000.0,
+                        value=float(vehicle_config["capacity"]),
+                        step=10.0,
+                        key=f"vehicle_capacity_{widget_key}",
+                    )
+                    if new_capacity != vehicle_config["capacity"]:
+                        config["vehicles"][source_index]["capacity"] = new_capacity
+                        state.config_modified = True
             with prop_cols[1]:
                 new_rate = st.number_input(
                     "Rate (Rp/km)",
@@ -134,10 +167,11 @@ def _render_vehicle_editor(state):
                     max_value=1000000.0,
                     value=float(vehicle_config["cost_per_km"]),
                     step=100.0,
-                    key=f"vehicle_rate_{idx}",
+                    key=f"vehicle_rate_{widget_key}",
+                    disabled=row["capacity_locked"] and not row["remove_allowed"],
                 )
                 if new_rate != vehicle_config["cost_per_km"]:
-                    config["vehicles"][idx]["cost_per_km"] = new_rate
+                    config["vehicles"][source_index]["cost_per_km"] = new_rate
                     state.config_modified = True
             with prop_cols[2]:
                 new_count = st.number_input(
@@ -146,19 +180,21 @@ def _render_vehicle_editor(state):
                     max_value=1000,
                     value=int(vehicle_config["fixed_count"]),
                     step=1,
-                    key=f"vehicle_count_{idx}",
+                    key=f"vehicle_count_{widget_key}",
+                    disabled=row["capacity_locked"] and not row["remove_allowed"],
                 )
                 if new_count != vehicle_config["fixed_count"]:
-                    config["vehicles"][idx]["fixed_count"] = new_count
+                    config["vehicles"][source_index]["fixed_count"] = new_count
                     state.config_modified = True
             with prop_cols[3]:
                 new_unlimited = st.checkbox(
                     "Unlimited",
                     value=bool(vehicle_config.get("unlimited", False)),
-                    key=f"vehicle_unlimited_{idx}",
+                    key=f"vehicle_unlimited_{widget_key}",
+                    disabled=row["capacity_locked"] and not row["remove_allowed"],
                 )
                 if new_unlimited != vehicle_config.get("unlimited", False):
-                    config["vehicles"][idx]["unlimited"] = new_unlimited
+                    config["vehicles"][source_index]["unlimited"] = new_unlimited
                     state.config_modified = True
             st.divider()
 
@@ -587,11 +623,8 @@ def render_sidebar(state):
         st.header("⚙️ Configuration")
         if state.vehicle_config is not None:
             with st.expander("🚗 Vehicle & Routing Summary", expanded=False):
-                for vehicle in state.vehicle_config["vehicles"]:
-                    unlimited = " ♾️" if vehicle.get("unlimited", False) else ""
-                    st.write(
-                        f"**{vehicle['name']}**: {vehicle['capacity']} kg × {vehicle['fixed_count']}{unlimited}"
-                    )
+                for line in vehicle_summary_lines(state.vehicle_config["vehicles"]):
+                    st.write(line)
                 st.download_button(
                     label="📥 Export Config",
                     data=configuration_service.export_config_yaml(state.vehicle_config),
