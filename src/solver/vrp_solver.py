@@ -37,7 +37,6 @@ class VRPSolver:
 
     # Service time per location (in minutes)
     SERVICE_TIME = 15
-    MOTOR_FRAGILE_CAPACITY_KG = 80
     MOTOR_STANDARD_CAPACITY_KG = 120
 
     def __init__(
@@ -608,7 +607,7 @@ class VRPSolver:
                 SolverVehicleSpec(
                     vehicle=self._clone_vehicle_with_capacity(
                         vehicle,
-                        self.MOTOR_FRAGILE_CAPACITY_KG,
+                        vehicle.capacity,
                     ),
                     allows_fragile=True,
                     is_motor=True,
@@ -619,7 +618,7 @@ class VRPSolver:
                 SolverVehicleSpec(
                     vehicle=self._clone_vehicle_with_capacity(
                         vehicle,
-                        self.MOTOR_STANDARD_CAPACITY_KG,
+                        vehicle.max_capacity or self.MOTOR_STANDARD_CAPACITY_KG,
                     ),
                     allows_fragile=False,
                     is_motor=True,
@@ -635,6 +634,7 @@ class VRPSolver:
             name=vehicle.name,
             capacity=capacity,
             cost_per_km=vehicle.cost_per_km,
+            max_capacity=vehicle.max_capacity,
             vehicle_id=vehicle.vehicle_id,
             fixed_cost=vehicle.fixed_cost,
         )

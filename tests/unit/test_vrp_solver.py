@@ -459,6 +459,59 @@ class TestVRPSolver:
         assert solution.routes[0].vehicle.capacity == 120
         assert solution.routes[0].total_weight == 100.0
 
+    def test_solver_non_fragile_motor_route_uses_custom_max_capacity(self, sample_depot):
+        """Non-fragile motor routes should honor per-motor max_capacity overrides."""
+        orders = [
+            self._make_order(
+                sale_order_id="N001",
+                weight=70.0,
+                coordinates=(-6.2100, 106.8500),
+            ),
+            self._make_order(
+                sale_order_id="N002",
+                weight=60.0,
+                coordinates=(-6.2110, 106.8510),
+            ),
+        ]
+        fleet = VehicleFleet(
+            vehicle_types=[
+                (
+                    Vehicle(
+                        name="Sepeda Motor",
+                        capacity=90,
+                        max_capacity=140,
+                        cost_per_km=1500,
+                    ),
+                    1,
+                    False,
+                )
+            ]
+        )
+        dist_matrix = np.array([
+            [0.0, 5.0, 6.0],
+            [5.0, 0.0, 1.0],
+            [6.0, 1.0, 0.0],
+        ])
+        dur_matrix = np.array([
+            [0.0, 10.0, 11.0],
+            [10.0, 0.0, 5.0],
+            [11.0, 5.0, 0.0],
+        ])
+
+        solution = VRPSolver(
+            orders=orders,
+            fleet=fleet,
+            depot=sample_depot,
+            distance_matrix=dist_matrix,
+            duration_matrix=dur_matrix,
+            config={"constraints": {"enforce_city_limit": False}},
+        ).solve(optimization_strategy="balanced", time_limit=10)
+
+        assert solution.total_orders_delivered == 2
+        assert len(solution.routes) == 1
+        assert solution.routes[0].vehicle.capacity == 140
+        assert solution.routes[0].total_weight == 130.0
+
     def test_solver_fragile_order_cannot_use_120kg_motor_variant(self, sample_depot):
         """Fragile orders should remain unassigned when only 120kg-equivalent motor fit exists."""
         orders = [

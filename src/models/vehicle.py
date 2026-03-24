@@ -21,6 +21,7 @@ class Vehicle:
     name: str
     capacity: float  # in kg
     cost_per_km: float  # in Rupiah
+    max_capacity: Optional[float] = None
     vehicle_id: Optional[int] = None
     fixed_cost: float = 0.0  # Fixed cost for using this vehicle
 
@@ -31,6 +32,14 @@ class Vehicle:
 
         if self.cost_per_km < 0:
             raise ValueError(f"Vehicle {self.name}: Cost per km must be non-negative")
+
+        if self.max_capacity is not None:
+            if self.max_capacity <= 0:
+                raise ValueError(f"Vehicle {self.name}: Max capacity must be positive")
+            if self.max_capacity < self.capacity:
+                raise ValueError(
+                    f"Vehicle {self.name}: Max capacity must be greater than or equal to capacity"
+                )
 
     def clone_with_id(self, vehicle_id: int) -> "Vehicle":
         """
@@ -46,6 +55,7 @@ class Vehicle:
         return Vehicle(
             name=f"{self.name}_{vehicle_id}",
             capacity=self.capacity,
+            max_capacity=self.max_capacity,
             cost_per_km=self.cost_per_km,
             vehicle_id=vehicle_id,
             fixed_cost=self.fixed_cost,

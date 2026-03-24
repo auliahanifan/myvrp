@@ -113,6 +113,34 @@ def test_configuration_service_round_trips_vehicle_config():
     assert rebuilt_fleet.vehicle_types[0][1] == 2
 
 
+def test_configuration_service_round_trips_motor_max_capacity():
+    from src.application.configuration_service import ConfigurationService
+
+    service = ConfigurationService()
+    fleet = VehicleFleet(
+        vehicle_types=[
+            (
+                Vehicle(
+                    name="Sepeda Motor",
+                    capacity=85.0,
+                    max_capacity=130.0,
+                    cost_per_km=2500.0,
+                    fixed_cost=25000.0,
+                ),
+                2,
+                False,
+            )
+        ]
+    )
+
+    config_dict = service.fleet_to_config_dict(fleet)
+    rebuilt_fleet = service.config_dict_to_fleet(config_dict)
+
+    assert config_dict["vehicles"][0]["capacity"] == 85.0
+    assert config_dict["vehicles"][0]["max_capacity"] == 130.0
+    assert rebuilt_fleet.vehicle_types[0][0].max_capacity == 130.0
+
+
 def test_history_service_lists_latest_results_first(tmp_path: Path):
     from src.application.history_service import HistoryService
 

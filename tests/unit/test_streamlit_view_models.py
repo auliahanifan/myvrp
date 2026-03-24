@@ -12,6 +12,7 @@ def test_vehicle_editor_rows_expands_motor_into_fragile_and_non_fragile_rows():
             {
                 "name": "Sepeda Motor",
                 "capacity": 80.0,
+                "max_capacity": 135.0,
                 "cost_per_km": 1500.0,
                 "fixed_count": 5,
                 "unlimited": False,
@@ -19,17 +20,12 @@ def test_vehicle_editor_rows_expands_motor_into_fragile_and_non_fragile_rows():
         ]
     )
 
-    assert [row["display_name"] for row in rows] == [
-        "Sepeda Motor 80 kg (Fragile)",
-        "Sepeda Motor 120 kg (Non-Fragile)",
-    ]
-    assert [row["capacity"] for row in rows] == [80.0, 120.0]
+    assert len(rows) == 1
+    assert rows[0]["display_name"] == "Sepeda Motor"
+    assert rows[0]["capacity"] == 80.0
+    assert rows[0]["max_capacity"] == 135.0
     assert rows[0]["source_index"] == 0
-    assert rows[1]["source_index"] == 0
-    assert rows[0]["capacity_locked"] is True
-    assert rows[1]["capacity_locked"] is True
-    assert rows[0]["remove_allowed"] is True
-    assert rows[1]["remove_allowed"] is False
+    assert rows[0]["is_motor"] is True
 
 
 def test_vehicle_editor_rows_keeps_non_motor_as_single_editable_row():
@@ -48,7 +44,8 @@ def test_vehicle_editor_rows_keeps_non_motor_as_single_editable_row():
     assert len(rows) == 1
     assert rows[0]["display_name"] == "Blind Van"
     assert rows[0]["capacity"] == 800.0
-    assert rows[0]["capacity_locked"] is False
+    assert rows[0]["max_capacity"] is None
+    assert rows[0]["is_motor"] is False
 
 
 def test_vehicle_summary_lines_uses_same_motor_expansion_as_editor():
@@ -57,6 +54,7 @@ def test_vehicle_summary_lines_uses_same_motor_expansion_as_editor():
             {
                 "name": "Sepeda Motor",
                 "capacity": 80.0,
+                "max_capacity": 140.0,
                 "cost_per_km": 1500.0,
                 "fixed_count": 5,
                 "unlimited": True,
@@ -65,6 +63,5 @@ def test_vehicle_summary_lines_uses_same_motor_expansion_as_editor():
     )
 
     assert lines == [
-        "**Sepeda Motor 80 kg (Fragile)**: 80.0 kg x 5 ♾️",
-        "**Sepeda Motor 120 kg (Non-Fragile)**: 120.0 kg x 5 ♾️",
+        "**Sepeda Motor**: normal 80.0 kg / max 140.0 kg x 5 ♾️",
     ]

@@ -184,3 +184,68 @@ unlimited: false"""
             assert fleet.unlimited is False
         finally:
             os.unlink(temp_path)
+
+    def test_parse_motor_max_capacity(self):
+        """Motor config may provide an explicit max_capacity."""
+        data = """vehicles:
+  - name: "Sepeda Motor"
+    capacity: 85
+    max_capacity: 135
+    cost_per_km: 1500
+    fixed_count: 2
+"""
+
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.yaml') as f:
+            f.write(data)
+            temp_path = f.name
+
+        try:
+            parser = YAMLParser(temp_path)
+            fleet = parser.parse()
+            motor, _, _ = fleet.vehicle_types[0]
+            assert motor.capacity == 85
+            assert motor.max_capacity == 135
+        finally:
+            os.unlink(temp_path)
+
+    def test_parse_legacy_motor_defaults_max_capacity_to_120(self):
+        """Legacy motor configs keep the previous 120kg non-fragile behavior."""
+        data = """vehicles:
+  - name: "Sepeda Motor"
+    capacity: 80
+    cost_per_km: 1500
+    fixed_count: 2
+"""
+
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.yaml') as f:
+            f.write(data)
+            temp_path = f.name
+
+        try:
+            parser = YAMLParser(temp_path)
+            fleet = parser.parse()
+            motor, _, _ = fleet.vehicle_types[0]
+            assert motor.max_capacity == 120
+        finally:
+            os.unlink(temp_path)
+
+    def test_parse_motor_rejects_max_capacity_lower_than_normal_capacity(self):
+        """Motor max_capacity must not be lower than its normal capacity."""
+        data = """vehicles:
+  - name: "Sepeda Motor"
+    capacity: 90
+    max_capacity: 80
+    cost_per_km: 1500
+"""
+
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.yaml') as f:
+            f.write(data)
+            temp_path = f.name
+
+        try:
+            parser = YAMLParser(temp_path)
+            with pytest.raises(YAMLParserError) as exc_info:
+                parser.parse()
+            assert "max_capacity must be greater than or equal to capacity" in str(exc_info.value)
+        finally:
+            os.unlink(temp_path)

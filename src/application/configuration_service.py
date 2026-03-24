@@ -41,17 +41,21 @@ class ConfigurationService:
         )
 
     def fleet_to_config_dict(self, fleet: VehicleFleet) -> dict[str, Any]:
+        vehicles = []
+        for vehicle, count, unlimited in fleet.vehicle_types:
+            vehicle_config = {
+                "name": vehicle.name,
+                "capacity": vehicle.capacity,
+                "cost_per_km": vehicle.cost_per_km,
+                "fixed_count": count,
+                "unlimited": unlimited,
+            }
+            if vehicle.max_capacity is not None:
+                vehicle_config["max_capacity"] = vehicle.max_capacity
+            vehicles.append(vehicle_config)
+
         return {
-            "vehicles": [
-                {
-                    "name": vehicle.name,
-                    "capacity": vehicle.capacity,
-                    "cost_per_km": vehicle.cost_per_km,
-                    "fixed_count": count,
-                    "unlimited": unlimited,
-                }
-                for vehicle, count, unlimited in fleet.vehicle_types
-            ],
+            "vehicles": vehicles,
             "routing": {
                 "return_to_depot": fleet.return_to_depot,
                 "priority_time_tolerance": fleet.priority_time_tolerance,
@@ -71,17 +75,28 @@ class ConfigurationService:
             name = vehicle_config.get("name", "").strip()
             if not name:
                 raise ValueError("Vehicle name is required")
-            if vehicle_config.get("capacity", 0) <= 0:
+            capacity = float(vehicle_config.get("capacity", 0))
+            if capacity <= 0:
                 raise ValueError(f"Vehicle {name}: Capacity must be positive")
             if vehicle_config.get("cost_per_km", 0) < 0:
                 raise ValueError(f"Vehicle {name}: Rate must be non-negative")
             if vehicle_config.get("fixed_count", 0) <= 0:
                 raise ValueError(f"Vehicle {name}: Count must be positive")
+            max_capacity = vehicle_config.get("max_capacity")
+            if max_capacity is None and self._is_motor_vehicle(name):
+                max_capacity = 120.0
+            if max_capacity is not None:
+                max_capacity = float(max_capacity)
+                if max_capacity < capacity:
+                    raise ValueError(
+                        f"Vehicle {name}: Max capacity must be greater than or equal to capacity"
+                    )
 
             vehicle = Vehicle(
                 name=name,
-                capacity=float(vehicle_config["capacity"]),
+                capacity=capacity,
                 cost_per_km=float(vehicle_config["cost_per_km"]),
+                max_capacity=max_capacity,
                 fixed_cost=float(vehicle_config["cost_per_km"]) * 10,
             )
             vehicle_types.append(
@@ -121,3 +136,6 @@ class ConfigurationService:
             return parser.get_hubs_config()
         except Exception:
             return MultiHubConfig(enabled=False)
+
+    def _is_motor_vehicle(self, name: str) -> bool:
+        return "motor" in name.lower()

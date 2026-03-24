@@ -506,6 +506,20 @@ class YAMLParser:
         except (ValueError, TypeError):
             raise ValueError(f"Invalid capacity: {vehicle_data['capacity']}")
 
+        max_capacity_raw = vehicle_data.get("max_capacity")
+        if max_capacity_raw is None and self._is_motor_vehicle_name(name):
+            max_capacity = 120.0
+        elif max_capacity_raw is None:
+            max_capacity = None
+        else:
+            try:
+                max_capacity = float(max_capacity_raw)
+            except (ValueError, TypeError):
+                raise ValueError(f"Invalid max_capacity: {max_capacity_raw}")
+
+        if max_capacity is not None and max_capacity < capacity:
+            raise ValueError("max_capacity must be greater than or equal to capacity")
+
         try:
             cost_per_km = float(vehicle_data["cost_per_km"])
         except (ValueError, TypeError):
@@ -532,10 +546,14 @@ class YAMLParser:
             name=name.strip(),
             capacity=capacity,
             cost_per_km=cost_per_km,
+            max_capacity=max_capacity,
             fixed_cost=fixed_cost,
         )
 
         return vehicle, fixed_count, unlimited
+
+    def _is_motor_vehicle_name(self, name: str) -> bool:
+        return "motor" in name.lower()
 
     def get_summary(self) -> dict:
         """
